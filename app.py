@@ -447,6 +447,7 @@ if "upload_meta" not in st.session_state: st.session_state["upload_meta"] = None
 if "uploaded_depot_name" not in st.session_state: st.session_state["uploaded_depot_name"] = None
 if "uploaded_capacity_kw" not in st.session_state: st.session_state["uploaded_capacity_kw"] = None
 if "last_activated_upload_id" not in st.session_state: st.session_state["last_activated_upload_id"] = None
+if "upload_activation_notice" not in st.session_state: st.session_state["upload_activation_notice"] = None
 if "data_source_status" not in st.session_state: st.session_state["data_source_status"] = "Real UKPN Optimise Prime bundled data"
 
 st.markdown("""
@@ -516,6 +517,7 @@ with st.sidebar:
         st.session_state["current_depot"] = selected_depot
 
         if selected_depot in DEPOT_CAPACITY_KW:
+            st.session_state["upload_activation_notice"] = None
             st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[selected_depot]
             st.session_state["warn_threshold"] = round(
                 WARNING_ALPHA * DEPOT_CAPACITY_KW[selected_depot], 1
@@ -857,6 +859,38 @@ elif nav_selection == "🏢 Depots Setup":
 elif nav_selection == "📊 Upload Depot Data":
     st.title("📊 Upload Depot Data")
 
+    activation_notice = st.session_state.get("upload_activation_notice")
+    uploaded_is_active = (
+        st.session_state.get("uploaded_df") is not None
+        and st.session_state.get("uploaded_depot_name") is not None
+        and st.session_state["current_depot"] == st.session_state["uploaded_depot_name"]
+    )
+
+    if activation_notice and uploaded_is_active:
+        st.success(
+            f"✅ Retraining completed for **{st.session_state['uploaded_depot_name']}**. "
+            "The uploaded telemetry is now the active dataset."
+        )
+
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Model", "XGBoost")
+        r2.metric("Trees", "340")
+        r3.metric("Held-out rows", f"{len(y_test):,}")
+        r4.metric("Held-out MAE", f"{model_meta['metrics_xgb']['mae']} kW")
+
+        st.caption(
+            f"Split used: {model_meta.get('split_strategy', 'chronological split')} | "
+            f"Training: {model_meta.get('train_period', 'N/A')} | "
+            f"Validation: {model_meta.get('validation_period', 'N/A')} | "
+            f"Held-out test: {model_meta.get('test_period', 'N/A')}"
+        )
+
+        st.info(
+            "The retrained model is now used by the Home, Demand Forecast, "
+            "Scenario Analysis, Model Performance, Alerts, Reports and Archive pages "
+            "while this uploaded depot is selected."
+        )
+
     st.markdown("### Import depot telemetry data")
     st.caption(
         "Use this page to upload telemetry for a depot that is not already included "
@@ -956,12 +990,16 @@ elif nav_selection == "📊 Upload Depot Data":
                     WARNING_ALPHA * float(uploaded_capacity), 1
                 )
                 st.session_state["last_activated_upload_id"] = upload_id
+                st.session_state["upload_activation_notice"] = {
+                    "depot": clean_name,
+                    "filename": uploaded_file.name,
+                    "requested": True,
+                }
 
-                st.success(
-                    "Validation complete. The uploaded depot is now active. "
-                    "The XGBoost model will retrain automatically using the uploaded "
-                    "telemetry on the next app rerun."
-                )
+                # Rerun immediately. Before the Upload page renders again, the main
+                # pipeline executes with the uploaded dataframe and trains/evaluates
+                # the 340-tree XGBoost model. The completed status panel above then
+                # confirms the result to the user.
                 st.rerun()
 
         except Exception as exc:
