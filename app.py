@@ -609,23 +609,41 @@ if nav_selection == "🏠 Home / Overview":
     recent_series = history_series.iloc[-recent_lookback:]
     full_test_series = y_test.copy()
 
-    st.markdown("**Recent operational view (last 192 intervals / 2 days)**")
+    recent_start_label = recent_series.index.min().strftime("%d %b %Y")
+    recent_end_label = recent_series.index.max().strftime("%d %b %Y")
+    heldout_start_label = full_test_series.index.min().strftime("%d %b %Y")
+    heldout_end_label = full_test_series.index.max().strftime("%d %b %Y")
+
+    st.markdown(
+        f"**Recent operational view — {recent_start_label} to {recent_end_label}**"
+    )
     st.caption(
-        f"A short-window operational view for {st.session_state['current_depot']} using the latest "
-        f"{recent_lookback} fifteen-minute intervals."
+        f"Latest {recent_lookback} fifteen-minute intervals for "
+        f"{st.session_state['current_depot']}."
     )
     st.plotly_chart(
-        build_home_history_chart(recent_series, xaxis_title="Time", peak_label="Recent Peak"),
+        build_home_history_chart(
+            recent_series,
+            xaxis_title="Time",
+            peak_label="Recent-window peak",
+        ),
         use_container_width=True,
     )
 
-    st.markdown("**Full multi-month held-out view**")
+    st.markdown(
+        f"**Full held-out test view — {heldout_start_label} to {heldout_end_label}**"
+    )
     st.caption(
-        f"Untouched held-out test period used for evaluation: {model_meta['test_period']} "
-        f"({model_meta['test_observations']:,} observations)."
+        f"Full untouched held-out test period used for evaluation "
+        f"({model_meta['test_observations']:,} observations). "
+        f"This period includes the recent operational window shown above."
     )
     st.plotly_chart(
-        build_home_history_chart(full_test_series, xaxis_title="Date", peak_label="Held-Out Peak"),
+        build_home_history_chart(
+            full_test_series,
+            xaxis_title="Date",
+            peak_label="Held-out-period peak",
+        ),
         use_container_width=True,
     )
 
