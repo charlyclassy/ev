@@ -949,8 +949,65 @@ elif nav_selection == "⚙️ Model Performance":
 
 elif nav_selection == "🚨 System Alerts":
     st.title("🚨 System Alerts")
-    ledger = [{"Event Timestamp": datetime.now().strftime("%Y-%m-%d %H:00"), "Target Depot Node": st.session_state["current_depot"], "Forecast Peak": f"{round(predicted_peak, 1)} kW", "Capacity Ceiling Cap": f"{st.session_state['grid_limit']} kW", "Alert Status Code": "Active"}]
-    st.dataframe(pd.DataFrame(ledger), use_container_width=True)
+    st.caption(
+        "Forecast-based alert status for the selected depot using the latest "
+        "available Optimise Prime data context."
+    )
+
+    planning_threshold = float(st.session_state["grid_limit"])
+    warning_threshold = float(st.session_state["warn_threshold"])
+
+    if predicted_peak >= planning_threshold:
+        alert_status = "Capacity Breach Predicted"
+        status_reason = (
+            "Forecast peak is at or above the planning capacity threshold."
+        )
+    elif predicted_peak >= warning_threshold:
+        alert_status = "Warning"
+        status_reason = (
+            "Forecast peak is at or above the warning threshold but below "
+            "the planning capacity threshold."
+        )
+    else:
+        alert_status = "No Alert"
+        status_reason = "Forecast peak is below the warning threshold."
+
+    # Use the latest available data timestamp rather than the current clock,
+    # so the page does not imply live telemetry.
+    latest_data_timestamp = history_series.index.max()
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Predicted Peak", f"{predicted_peak:.1f} kW")
+    c2.metric("Warning Threshold", f"{warning_threshold:.1f} kW")
+    c3.metric("Planning Capacity Threshold", f"{planning_threshold:.1f} kW")
+
+    if alert_status == "Capacity Breach Predicted":
+        st.error(f"**{alert_status}** — {status_reason}")
+    elif alert_status == "Warning":
+        st.warning(f"**{alert_status}** — {status_reason}")
+    else:
+        st.success(f"**{alert_status}** — {status_reason}")
+
+    ledger = pd.DataFrame([{
+        "Forecast Reference Time": latest_data_timestamp.strftime("%d %b %Y, %H:%M"),
+        "Depot": st.session_state["current_depot"],
+        "Predicted Peak": f"{predicted_peak:.1f} kW",
+        "Warning Threshold": f"{warning_threshold:.1f} kW",
+        "Planning Capacity Threshold": f"{planning_threshold:.1f} kW",
+        "Alert Status": alert_status,
+        "Status Reason": status_reason,
+    }])
+
+    st.dataframe(
+        ledger,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.info(
+        "This page reports forecast-based status from the historical project dataset. "
+        "It does not represent live grid telemetry."
+    )
 
 elif nav_selection == "📋 Reports":
     st.title("📋 Reports")
