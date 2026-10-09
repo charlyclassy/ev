@@ -1133,6 +1133,27 @@ elif nav_selection == "📊 Upload Depot Data":
                     "not been used to fit that model."
                 )
 
+            st.markdown(
+                """
+                <style>
+                div[data-testid="stButton"] button[kind="primary"] {
+                    background-color: #2563EB !important;
+                    border-color: #2563EB !important;
+                    color: #FFFFFF !important;
+                }
+                div[data-testid="stButton"] button[kind="primary"]:hover {
+                    background-color: #1D4ED8 !important;
+                    border-color: #1D4ED8 !important;
+                    color: #FFFFFF !important;
+                }
+                div[data-testid="stButton"] button[kind="primary"]:focus {
+                    box-shadow: 0 0 0 0.2rem rgba(37, 99, 235, 0.22) !important;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+
             evaluate_clicked = st.button(
                 "Evaluate Existing Model on Uploaded Data",
                 type="primary",
