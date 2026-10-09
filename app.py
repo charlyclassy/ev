@@ -36,36 +36,62 @@ STEPS_PER_HOUR = 60 // SAMPLING_MINUTES
 STEPS_PER_DAY = 24 * STEPS_PER_HOUR
 STEPS_PER_WEEK = 7 * STEPS_PER_DAY
 
+# The app supports either one combined processed file or the nine
+# individual real depot CSVs placed at the repository root.
 BUNDLED_DATA_CANDIDATES = [
     Path("data/processed/depot_demand.csv"),
     Path("UKPN_OptimisePrime_9_Depots_Processed.csv"),
 ]
 
-
-def _bundled_data_path() -> Path:
-    for path in BUNDLED_DATA_CANDIDATES:
-        if path.exists():
-            return path
-    raise FileNotFoundError(
-        "Real Optimise Prime data was not found. Put the combined real dataset at "
-        "data/processed/depot_demand.csv in the GitHub repository."
-    )
+INDIVIDUAL_DEPOT_FILES = {
+    "Bexleyheath": Path("UKPN_OptimisePrime_Bexleyheath.csv"),
+    "Camden": Path("UKPN_OptimisePrime_Camden.csv"),
+    "Dartford": Path("UKPN_OptimisePrime_Dartford.csv"),
+    "Islington": Path("UKPN_OptimisePrime_Islington.csv"),
+    "Mount Pleasant": Path("UKPN_OptimisePrime_Mount_Pleasant.csv"),
+    "Orpington": Path("UKPN_OptimisePrime_Orpington.csv"),
+    "Premier Park": Path("UKPN_OptimisePrime_Premier_Park.csv"),
+    "Victoria": Path("UKPN_OptimisePrime_Victoria.csv"),
+    "Whitechapel": Path("UKPN_OptimisePrime_Whitechapel.csv"),
+}
 
 
 @st.cache_data(show_spinner=False)
 def load_real_depot_data(depot_name: str) -> pd.DataFrame:
-    """Load one genuine Optimise Prime depot from the combined processed file."""
-    path = _bundled_data_path()
+    """Load one genuine Optimise Prime depot."""
+    # Prefer a combined dataset if one exists.
+    for path in BUNDLED_DATA_CANDIDATES:
+        if path.exists():
+            raw = pd.read_csv(path, parse_dates=["timestamp"], dtype={"depot_id": str})
+            required = {"timestamp", "depot_id", "demand_kw"}
+            missing = required.difference(raw.columns)
+            if missing:
+                raise ValueError(f"Real depot file is missing columns: {sorted(missing)}")
+
+            df = raw.loc[
+                raw["depot_id"].astype(str) == depot_name,
+                ["timestamp", "demand_kw"],
+            ].copy()
+            if not df.empty:
+                df = df.rename(columns={"timestamp": "Timestamp", "demand_kw": "Demand_kW"})
+                return df.sort_values("Timestamp").reset_index(drop=True)
+
+    # Otherwise load the matching individual depot CSV from repo root.
+    path = INDIVIDUAL_DEPOT_FILES.get(depot_name)
+    if path is None:
+        raise ValueError(f"Unknown depot: {depot_name}")
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Real data file for {depot_name} was not found. Expected: {path}"
+        )
+
     raw = pd.read_csv(path, parse_dates=["timestamp"], dtype={"depot_id": str})
-    required = {"timestamp", "depot_id", "demand_kw"}
+    required = {"timestamp", "demand_kw"}
     missing = required.difference(raw.columns)
     if missing:
-        raise ValueError(f"Real depot file is missing columns: {sorted(missing)}")
+        raise ValueError(f"{path.name} is missing columns: {sorted(missing)}")
 
-    df = raw.loc[raw["depot_id"].astype(str) == depot_name, ["timestamp", "demand_kw"]].copy()
-    if df.empty:
-        raise ValueError(f"No rows found for depot '{depot_name}' in {path}.")
-
+    df = raw[["timestamp", "demand_kw"]].copy()
     df = df.rename(columns={"timestamp": "Timestamp", "demand_kw": "Demand_kW"})
     return df.sort_values("Timestamp").reset_index(drop=True)
 
@@ -314,7 +340,7 @@ try:
         )
 except Exception as exc:
     st.error(str(exc))
-    st.info("For Streamlit Cloud, add the combined real file as data/processed/depot_demand.csv, commit, and push it to GitHub.")
+    st.info("Real Optimise Prime data is loaded from the depot CSV files included in this GitHub repository.")
     st.stop()
 
 model_meta = pipeline["metadata"]
