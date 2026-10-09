@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import xgboost as xgb
 from pathlib import Path
 from datetime import datetime, timedelta
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 st.set_page_config(page_title="EV Depot Demand Forecaster", layout="wide")
 
@@ -520,6 +520,15 @@ elif nav_selection == "⚙️ Model Performance":
     
     # Full held-out test period (no short lookback truncation)
     residuals = y_test.values - xgb_predictions
+    test_start_label = y_test.index.min().strftime("%d %b %Y")
+    test_end_label = y_test.index.max().strftime("%d %b %Y")
+    r2 = r2_score(y_test.values, xgb_predictions)
+
+    # Performance summary row for the selected depot / held-out period
+    ps1, ps2, ps3 = st.columns(3)
+    ps1.metric("Held-out test period", f"{test_start_label} → {test_end_label}")
+    ps2.metric("Test observations", f"{len(y_test):,}")
+    ps3.metric("R²", f"{r2:.3f}")
 
     # Plot 1: Actual vs Predicted Demand across the complete held-out test period
     fig_avp = go.Figure()
@@ -528,7 +537,9 @@ elif nav_selection == "⚙️ Model Performance":
             x=y_test.index,
             y=y_test.values,
             name="Actual Demand",
-            line=dict(color="#0F172A"),
+            mode="lines",
+            line=dict(color="#0F172A", width=1.4),
+            hovertemplate="%{x|%d %b %Y %H:%M}<br>Actual: %{y:.2f} kW<extra></extra>",
         )
     )
     fig_avp.add_trace(
@@ -536,55 +547,154 @@ elif nav_selection == "⚙️ Model Performance":
             x=y_test.index,
             y=xgb_predictions,
             name="XGBoost Prediction",
-            line=dict(color="#10B981", dash="dash"),
+            mode="lines",
+            line=dict(color="#10B981", width=1.2, dash="dash"),
+            hovertemplate="%{x|%d %b %Y %H:%M}<br>Predicted: %{y:.2f} kW<extra></extra>",
         )
     )
     fig_avp.update_layout(
-        title="Actual vs Predicted Demand — Full Held-Out Test Period",
-        xaxis_title="Held-Out Test Period",
+        title={
+            "text": f"Actual vs Predicted Demand — Full Held-Out Test Period"
+                    f"<br><sup>{test_start_label} to {test_end_label}</sup>",
+            "x": 0.01,
+        },
+        xaxis_title="Date",
         yaxis_title="Demand (kW)",
         template="plotly_white",
-        height=420,
-        legend=dict(orientation="h", y=1.10),
+        height=470,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(l=20, r=20, t=85, b=35),
     )
-    fig_avp.update_xaxes(rangeslider=dict(visible=True))
+    fig_avp.update_xaxes(
+        rangeslider=dict(visible=True, thickness=0.10),
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_avp.update_yaxes(
+        rangemode="tozero",
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
     st.plotly_chart(fig_avp, use_container_width=True)
 
     # Plot 2: Residuals across the complete held-out test period
+    abs_res = np.abs(residuals)
+    p95 = float(np.percentile(abs_res, 95))
     fig_res = go.Figure()
+    fig_res.add_hrect(
+        y0=-p95, y1=p95,
+        fillcolor="rgba(16,185,129,0.08)",
+        line_width=0,
+        annotation_text="95% absolute-error band",
+        annotation_position="top left",
+    )
     fig_res.add_trace(
         go.Scatter(
             x=y_test.index,
             y=residuals,
             name="Residual (Actual - Predicted)",
-            line=dict(color="#EF4444"),
+            mode="lines",
+            line=dict(color="#EF4444", width=1),
+            hovertemplate="%{x|%d %b %Y %H:%M}<br>Residual: %{y:.2f} kW<extra></extra>",
         )
     )
-    fig_res.add_shape(
-        type="line",
-        x0=y_test.index[0],
-        x1=y_test.index[-1],
-        y0=0,
-        y1=0,
-        line=dict(color="#64748B", dash="dash"),
-    )
+    fig_res.add_hline(y=0, line=dict(color="#64748B", dash="dash", width=1.2))
     fig_res.update_layout(
-        title="Residuals Over Time — Full Held-Out Test Period",
-        xaxis_title="Held-Out Test Period",
+        title={
+            "text": "Residuals Over Time — Full Held-Out Test Period"
+                    f"<br><sup>Green band = ±95th percentile absolute residual ({p95:.2f} kW)</sup>",
+            "x": 0.01,
+        },
+        xaxis_title="Date",
         yaxis_title="Residual (kW)",
         template="plotly_white",
-        height=340,
+        height=390,
+        hovermode="x unified",
+        margin=dict(l=20, r=20, t=85, b=35),
     )
-    fig_res.update_xaxes(rangeslider=dict(visible=True))
+    fig_res.update_xaxes(
+        rangeslider=dict(visible=True, thickness=0.10),
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_res.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
     st.plotly_chart(fig_res, use_container_width=True)
 
+    # Plot 3: Actual vs Predicted scatter with identity line and performance annotation
     fig_scat = go.Figure()
-    fig_scat.add_trace(go.Scatter(x=y_test.values, y=xgb_predictions, mode='markers', marker=dict(color='#2563EB', opacity=0.5), name="Predictions"))
-    min_val = min(y_test.min(), xgb_predictions.min())
-    max_val = max(y_test.max(), xgb_predictions.max())
-    fig_scat.add_shape(type="line", x0=min_val, y0=min_val, x1=max_val, y1=max_val, line=dict(color="#64748B", width=2))
-    fig_scat.update_layout(title="Actual vs Predicted Scatter Plot", xaxis_title="Actual Demand (kW)", yaxis_title="XGBoost Predicted Demand (kW)", template="plotly_white", height=350)
+    fig_scat.add_trace(
+        go.Scatter(
+            x=y_test.values,
+            y=xgb_predictions,
+            mode="markers",
+            marker=dict(size=5, opacity=0.28, color="#2563EB"),
+            name="Held-out observations",
+            hovertemplate="Actual: %{x:.2f} kW<br>Predicted: %{y:.2f} kW<extra></extra>",
+        )
+    )
+    min_val = float(min(y_test.min(), xgb_predictions.min()))
+    max_val = float(max(y_test.max(), xgb_predictions.max()))
+    fig_scat.add_trace(
+        go.Scatter(
+            x=[min_val, max_val],
+            y=[min_val, max_val],
+            mode="lines",
+            line=dict(color="#64748B", width=2, dash="dash"),
+            name="Ideal prediction (y = x)",
+            hoverinfo="skip",
+        )
+    )
+    fig_scat.update_layout(
+        title={
+            "text": "Actual vs Predicted Scatter — Full Held-Out Test Period"
+                    f"<br><sup>R² = {r2:.3f} | MAE = {model_meta['metrics_xgb']['mae']} kW"
+                    f" | RMSE = {model_meta['metrics_xgb']['rmse']} kW</sup>",
+            "x": 0.01,
+        },
+        xaxis_title="Actual Demand (kW)",
+        yaxis_title="XGBoost Predicted Demand (kW)",
+        template="plotly_white",
+        height=500,
+        legend=dict(orientation="h", y=1.10),
+        margin=dict(l=20, r=20, t=90, b=35),
+    )
+    fig_scat.update_xaxes(
+        range=[min_val, max_val],
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_scat.update_yaxes(
+        range=[min_val, max_val],
+        scaleanchor="x",
+        scaleratio=1,
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
     st.plotly_chart(fig_scat, use_container_width=True)
+
+    # Plot 4: Residual distribution
+    hist_counts, hist_edges = np.histogram(residuals, bins=40)
+    hist_centres = (hist_edges[:-1] + hist_edges[1:]) / 2
+    fig_hist = go.Figure()
+    fig_hist.add_trace(
+        go.Bar(
+            x=hist_centres,
+            y=hist_counts,
+            name="Residual count",
+            hovertemplate="Residual: %{x:.2f} kW<br>Count: %{y}<extra></extra>",
+        )
+    )
+    fig_hist.add_vline(x=0, line=dict(color="#64748B", dash="dash"))
+    fig_hist.update_layout(
+        title="Residual Distribution — Held-Out Test Period",
+        xaxis_title="Residual (Actual - Predicted) kW",
+        yaxis_title="Count",
+        template="plotly_white",
+        height=360,
+        margin=dict(l=20, r=20, t=60, b=35),
+    )
+    st.plotly_chart(fig_hist, use_container_width=True)
 
 elif nav_selection == "🚨 System Alerts":
     st.title("🚨 System Alerts")
