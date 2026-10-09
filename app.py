@@ -574,6 +574,7 @@ def evaluate_existing_model_on_uploaded_data(
         "start": feat.index.min(),
         "end": feat.index.max(),
         "rows": len(feat),
+        "timestamps": feat.index.to_numpy(),
         "actual": y_unseen,
         "predictions": preds,
         "baseline": baseline,
@@ -1208,6 +1209,10 @@ elif nav_selection == "📊 Upload Depot Data":
                         "rows": evaluation["rows"],
                         "xgb_metrics": xgb_eval,
                         "baseline_metrics": base_eval,
+                        "timestamps": evaluation["timestamps"],
+                        "actual": evaluation["actual"],
+                        "predictions": evaluation["predictions"],
+                        "baseline": evaluation["baseline"],
                     }
 
                     eval_progress.progress(
@@ -1304,6 +1309,135 @@ elif nav_selection == "📊 Upload Depot Data":
                     f"{eval_summary['start']:%d %b %Y %H:%M} to "
                     f"{eval_summary['end']:%d %b %Y %H:%M}. "
                     "No fitting was performed on these uploaded observations during this evaluation."
+                )
+
+                # ---------------------------------------------------------
+                # Visual generalisation checks on the genuinely unseen data
+                # ---------------------------------------------------------
+                eval_timestamps = pd.to_datetime(eval_summary["timestamps"])
+                eval_actual = np.asarray(eval_summary["actual"], dtype=float)
+                eval_pred = np.asarray(eval_summary["predictions"], dtype=float)
+                eval_baseline = np.asarray(eval_summary["baseline"], dtype=float)
+                eval_residuals = eval_actual - eval_pred
+
+                st.markdown("##### Unseen-data visual evaluation")
+
+                # Plot 1: actual demand vs existing XGBoost vs previous-day baseline.
+                fig_eval_ts = go.Figure()
+                fig_eval_ts.add_trace(
+                    go.Scatter(
+                        x=eval_timestamps,
+                        y=eval_actual,
+                        mode="lines",
+                        name="Actual Demand",
+                        line=dict(width=1.5),
+                    )
+                )
+                fig_eval_ts.add_trace(
+                    go.Scatter(
+                        x=eval_timestamps,
+                        y=eval_pred,
+                        mode="lines",
+                        name="Existing XGBoost",
+                        line=dict(width=1.3),
+                    )
+                )
+                fig_eval_ts.add_trace(
+                    go.Scatter(
+                        x=eval_timestamps,
+                        y=eval_baseline,
+                        mode="lines",
+                        name="Previous-Day Baseline",
+                        line=dict(width=1.0, dash="dot"),
+                    )
+                )
+                fig_eval_ts.update_layout(
+                    title="Actual vs Existing XGBoost vs Previous-Day Baseline",
+                    xaxis_title="Timestamp",
+                    yaxis_title="Demand (kW)",
+                    hovermode="x unified",
+                    height=440,
+                    margin=dict(l=40, r=20, t=65, b=40),
+                    legend=dict(orientation="h", y=1.12, x=0),
+                )
+                st.plotly_chart(fig_eval_ts, use_container_width=True)
+
+                # Plot 2: actual vs predicted scatter, with y=x ideal line.
+                scatter_max = float(max(np.max(eval_actual), np.max(eval_pred), 1.0))
+                fig_eval_scatter = go.Figure()
+                fig_eval_scatter.add_trace(
+                    go.Scatter(
+                        x=eval_actual,
+                        y=eval_pred,
+                        mode="markers",
+                        name="Unseen Observations",
+                        marker=dict(size=5, opacity=0.30),
+                    )
+                )
+                fig_eval_scatter.add_trace(
+                    go.Scatter(
+                        x=[0, scatter_max],
+                        y=[0, scatter_max],
+                        mode="lines",
+                        name="Ideal: Predicted = Actual",
+                        line=dict(dash="dash"),
+                    )
+                )
+                fig_eval_scatter.update_layout(
+                    title="Actual vs Predicted Demand on Unseen Data",
+                    xaxis_title="Actual Demand (kW)",
+                    yaxis_title="Predicted Demand (kW)",
+                    height=430,
+                    margin=dict(l=40, r=20, t=65, b=40),
+                    xaxis=dict(range=[0, scatter_max]),
+                    yaxis=dict(range=[0, scatter_max], scaleanchor="x", scaleratio=1),
+                    legend=dict(orientation="h", y=1.12, x=0),
+                )
+                st.plotly_chart(fig_eval_scatter, use_container_width=True)
+
+                # Plot 3: residual distribution to show error bias/spread.
+                mean_residual = float(np.mean(eval_residuals))
+                median_residual = float(np.median(eval_residuals))
+                fig_eval_resid = go.Figure()
+                fig_eval_resid.add_trace(
+                    go.Histogram(
+                        x=eval_residuals,
+                        nbinsx=60,
+                        name="Residuals",
+                        opacity=0.80,
+                    )
+                )
+                fig_eval_resid.add_vline(
+                    x=0,
+                    line_dash="dash",
+                    annotation_text="Zero error",
+                    annotation_position="top",
+                )
+                fig_eval_resid.add_vline(
+                    x=mean_residual,
+                    line_dash="dot",
+                    annotation_text=f"Mean {mean_residual:.2f} kW",
+                    annotation_position="top left",
+                )
+                fig_eval_resid.add_vline(
+                    x=median_residual,
+                    line_dash="dot",
+                    annotation_text=f"Median {median_residual:.2f} kW",
+                    annotation_position="top right",
+                )
+                fig_eval_resid.update_layout(
+                    title="Unseen-Data Residual Distribution (Actual − Predicted)",
+                    xaxis_title="Residual (kW)",
+                    yaxis_title="Frequency",
+                    height=400,
+                    margin=dict(l=40, r=20, t=65, b=40),
+                    bargap=0.03,
+                )
+                st.plotly_chart(fig_eval_resid, use_container_width=True)
+
+                st.caption(
+                    "Residual = Actual − Predicted. Values near zero indicate small "
+                    "prediction errors; a distribution centred near zero indicates low systematic bias."
                 )
 
                 if xgb_eval["mae"] < base_eval["mae"]:
