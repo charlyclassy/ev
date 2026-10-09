@@ -376,7 +376,7 @@ with st.sidebar:
         st.session_state["uploaded_df"] = None
         st.session_state["upload_meta"] = None
     st.markdown("---")
-    nav_selection = st.radio("Navigation Menu:", ["🏠 Home / Overview", "🏢 Depots Setup", "📊 Upload Depot Data", "📈 Live Demand Forecast", "🚗 Scenario Analysis", "⚙️ Model Performance", "🚨 System Alerts", "📋 Reports", "📜 Archive History", "⚙️ Settings / Admin"])
+    nav_selection = st.radio("Navigation Menu:", ["🏠 Home / Overview", "🏢 Depots Setup", "📊 Upload Depot Data", "📈 Demand Forecast", "🚗 Scenario Analysis", "⚙️ Model Performance", "🚨 System Alerts", "📋 Reports", "📜 Archive History", "⚙️ Settings / Admin"])
 
 try:
     with st.spinner(f"Preparing {st.session_state['current_depot']} forecast from real Optimise Prime data..."):
@@ -491,7 +491,7 @@ elif nav_selection == "📊 Upload Depot Data":
         st.json(st.session_state["upload_meta"])
         st.button("Synchronize Pipeline Features & Re-train Model")
 
-elif nav_selection == "📈 Live Demand Forecast":
+elif nav_selection == "📈 Demand Forecast":
     st.markdown(
         """
         <h1 style="
