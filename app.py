@@ -452,11 +452,84 @@ if nav_selection == "🏠 Home / Overview":
     </div>
     """, unsafe_allow_html=True)
     
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Current Demand", f"{round(current_demand, 1)} kW")
-    c2.metric("Predicted Peak Demand", f"{round(predicted_peak, 1)} kW")
-    c3.metric("Planning Capacity Threshold", f"{st.session_state['grid_limit']} kW")
-    c4.metric("Warning Lead Time", lead_time)
+    # Custom summary cards avoid Streamlit's built-in ellipsis truncation
+    # and use slightly smaller text so long values such as
+    # "No breach predicted" remain fully visible.
+    current_demand_text = f"{round(current_demand, 1)} kW"
+    predicted_peak_text = f"{round(predicted_peak, 1)} kW"
+    planning_threshold_text = f"{float(st.session_state['grid_limit']):.1f} kW"
+    warning_lead_text = str(lead_time)
+
+    st.markdown(
+        f"""
+        <style>
+        .home-metric-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 18px;
+            margin: 18px 0 28px 0;
+        }}
+        .home-metric-card {{
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 18px 20px;
+            min-height: 108px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        }}
+        .home-metric-label {{
+            color: #64748B;
+            font-size: 0.78rem;
+            font-weight: 600;
+            line-height: 1.18;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+            margin-bottom: 8px;
+        }}
+        .home-metric-value {{
+            color: #0F172A;
+            font-size: 1.72rem;
+            font-weight: 700;
+            line-height: 1.12;
+            white-space: normal;
+            overflow-wrap: anywhere;
+        }}
+        @media (max-width: 950px) {{
+            .home-metric-grid {{
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }}
+        }}
+        @media (max-width: 560px) {{
+            .home-metric-grid {{
+                grid-template-columns: 1fr;
+            }}
+        }}
+        </style>
+
+        <div class="home-metric-grid">
+            <div class="home-metric-card">
+                <div class="home-metric-label">Current Demand</div>
+                <div class="home-metric-value">{current_demand_text}</div>
+            </div>
+            <div class="home-metric-card">
+                <div class="home-metric-label">Predicted Peak Demand</div>
+                <div class="home-metric-value">{predicted_peak_text}</div>
+            </div>
+            <div class="home-metric-card">
+                <div class="home-metric-label">Planning Capacity Threshold</div>
+                <div class="home-metric-value">{planning_threshold_text}</div>
+            </div>
+            <div class="home-metric-card">
+                <div class="home-metric-label">Warning Lead Time</div>
+                <div class="home-metric-value">{warning_lead_text}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.subheader("Historical Headroom Footprint Profile")
     st.caption("Recent historical demand profile for the selected depot.")
