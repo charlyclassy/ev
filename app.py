@@ -300,14 +300,32 @@ def _recursive_forecast(model, history: pd.Series, feature_cols: list[str], hori
 
 
 @st.cache_resource(show_spinner=False)
-def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_hours: int, uploaded_df=None):
-    """Train/evaluate on real selected-depot data; never generate synthetic demand."""
+def execute_production_ml_pipeline(
+    depot_name: str,
+    capacity_kw: float,
+    horizon_hours: int,
+    uploaded_df=None,
+    _progress_callback=None,
+):
+    """Train/evaluate on depot data; never generate synthetic demand internally."""
+
+    def report_progress(percent: int, message: str):
+        if _progress_callback is not None:
+            _progress_callback(int(percent), message)
+
+    report_progress(5, "Loading depot telemetry")
     source_df = uploaded_df.copy() if uploaded_df is not None else load_real_depot_data(depot_name)
+
+    report_progress(12, "Standardising timestamps and demand to the 15-minute model grid")
     df = _standardise_input(source_df)
+
+    report_progress(25, "Engineering causal calendar, lag and rolling features")
     feat, feature_cols = _build_features(df)
 
     if len(feat) < STEPS_PER_WEEK * 2:
         raise ValueError("At least two weeks of 15-minute history are required for this model.")
+
+    report_progress(35, "Creating chronological training, validation and held-out test periods")
 
     # Chronological split. Bundled Optimise Prime depots use the fixed EPA
     # project periods. Uploaded telemetry uses its own dates so current/new
@@ -345,6 +363,11 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
     X_development = development_df[feature_cols]
     y_development = development_df["Demand_kW"]
 
+    report_progress(
+        45,
+        "Training XGBoost: 340 boosting rounds / trees on training + validation data",
+    )
+
     model = xgb.XGBRegressor(
         n_estimators=340,
         max_depth=7,
@@ -360,6 +383,7 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
     )
     model.fit(X_development, y_development)
 
+    report_progress(75, "XGBoost training complete — generating held-out predictions")
     xgb_preds = np.clip(model.predict(X_test), 0, None)
     baseline_preds = test_df["Lag_96"].to_numpy()  # previous-day same-time baseline at 15-minute resolution
     errors = y_test.to_numpy() - xgb_preds
@@ -392,12 +416,20 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
         false_alarm_ratio = f"{100 * fp / (tp + fp):.2f}%" if (tp + fp) else "N/A"
         return mae, rmse, recall, false_alarm_ratio
 
+    report_progress(85, "Evaluating XGBoost and previous-day baseline on the untouched held-out test rows")
     mae_xgb, rmse_xgb, recall_xgb, far_xgb = compute_metrics(y_test, xgb_preds)
     mae_base, rmse_base, recall_base, far_base = compute_metrics(y_test, baseline_preds)
+
+    report_progress(
+        94,
+        f"Generating the {horizon_hours}-hour recursive demand forecast",
+    )
 
     # Forecast beyond the final real observation. This is not a shifted test prediction.
     history_series = df["Demand_kW"].copy()
     future_times, future_forecast = _recursive_forecast(model, history_series, feature_cols, horizon_hours)
+
+    report_progress(100, "Retraining and evaluation completed")
 
     summary_metadata = {
         "model_type": "XGBoost 340-Tree Depot Demand Forecast Model",
@@ -859,38 +891,6 @@ elif nav_selection == "🏢 Depots Setup":
 elif nav_selection == "📊 Upload Depot Data":
     st.title("📊 Upload Depot Data")
 
-    activation_notice = st.session_state.get("upload_activation_notice")
-    uploaded_is_active = (
-        st.session_state.get("uploaded_df") is not None
-        and st.session_state.get("uploaded_depot_name") is not None
-        and st.session_state["current_depot"] == st.session_state["uploaded_depot_name"]
-    )
-
-    if activation_notice and uploaded_is_active:
-        st.success(
-            f"✅ Retraining completed for **{st.session_state['uploaded_depot_name']}**. "
-            "The uploaded telemetry is now the active dataset."
-        )
-
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("Model", "XGBoost")
-        r2.metric("Trees", "340")
-        r3.metric("Held-out rows", f"{len(y_test):,}")
-        r4.metric("Held-out MAE", f"{model_meta['metrics_xgb']['mae']} kW")
-
-        st.caption(
-            f"Split used: {model_meta.get('split_strategy', 'chronological split')} | "
-            f"Training: {model_meta.get('train_period', 'N/A')} | "
-            f"Validation: {model_meta.get('validation_period', 'N/A')} | "
-            f"Held-out test: {model_meta.get('test_period', 'N/A')}"
-        )
-
-        st.info(
-            "The retrained model is now used by the Home, Demand Forecast, "
-            "Scenario Analysis, Model Performance, Alerts, Reports and Archive pages "
-            "while this uploaded depot is selected."
-        )
-
     st.markdown("### Import depot telemetry data")
     st.caption(
         "Use this page to upload telemetry for a depot that is not already included "
@@ -968,39 +968,117 @@ elif nav_selection == "📊 Upload Depot Data":
                 ),
             )
 
-            if st.button(
+            retrain_clicked = st.button(
                 "Activate Data & Retrain XGBoost",
                 use_container_width=True,
-            ):
+            )
+
+            if retrain_clicked:
                 clean_name = uploaded_depot_label.strip() or "Uploaded Depot"
 
-                st.session_state["uploaded_df"] = raw_uploaded_df
-                st.session_state["uploaded_depot_name"] = clean_name
-                st.session_state["uploaded_capacity_kw"] = float(uploaded_capacity)
-                st.session_state["upload_meta"] = {
-                    "filename": uploaded_file.name,
-                    "rows": len(raw_uploaded_df),
-                    "columns": list(raw_uploaded_df.columns),
-                    "validation": validation,
-                    "split_strategy": "70% train / 15% validation / 15% held-out test",
-                }
-                st.session_state["current_depot"] = clean_name
-                st.session_state["grid_limit"] = float(uploaded_capacity)
-                st.session_state["warn_threshold"] = round(
-                    WARNING_ALPHA * float(uploaded_capacity), 1
+                progress_bar = st.progress(
+                    0,
+                    text="Preparing retraining workflow...",
                 )
-                st.session_state["last_activated_upload_id"] = upload_id
-                st.session_state["upload_activation_notice"] = {
-                    "depot": clean_name,
-                    "filename": uploaded_file.name,
-                    "requested": True,
-                }
+                retrain_status = st.status(
+                    "⏳ Retraining in progress",
+                    expanded=True,
+                    state="running",
+                )
 
-                # Rerun immediately. Before the Upload page renders again, the main
-                # pipeline executes with the uploaded dataframe and trains/evaluates
-                # the 340-tree XGBoost model. The completed status panel above then
-                # confirms the result to the user.
-                st.rerun()
+                last_message = {"text": None}
+
+                def update_retraining_progress(percent: int, message: str):
+                    progress_bar.progress(
+                        min(max(percent, 0), 100),
+                        text=f"{percent}% — {message}",
+                    )
+                    if message != last_message["text"]:
+                        retrain_status.write(f"**{percent}%** — {message}")
+                        last_message["text"] = message
+
+                try:
+                    retrain_status.write(
+                        "Model configuration: **XGBoost, 340 boosting rounds / trees**"
+                    )
+                    retrain_status.write(
+                        "Uploaded-data split: **70% training / 15% validation / 15% held-out test**"
+                    )
+
+                    retrained_pipeline = execute_production_ml_pipeline(
+                        clean_name,
+                        float(uploaded_capacity),
+                        int(st.session_state["forecast_horizon"]),
+                        raw_uploaded_df,
+                        _progress_callback=update_retraining_progress,
+                    )
+
+                    st.session_state["uploaded_df"] = raw_uploaded_df
+                    st.session_state["uploaded_depot_name"] = clean_name
+                    st.session_state["uploaded_capacity_kw"] = float(uploaded_capacity)
+                    st.session_state["upload_meta"] = {
+                        "filename": uploaded_file.name,
+                        "rows": len(raw_uploaded_df),
+                        "columns": list(raw_uploaded_df.columns),
+                        "validation": validation,
+                        "split_strategy": "70% train / 15% validation / 15% held-out test",
+                    }
+                    st.session_state["current_depot"] = clean_name
+                    st.session_state["grid_limit"] = float(uploaded_capacity)
+                    st.session_state["warn_threshold"] = round(
+                        WARNING_ALPHA * float(uploaded_capacity), 1
+                    )
+                    st.session_state["last_activated_upload_id"] = upload_id
+                    st.session_state["upload_activation_notice"] = {
+                        "depot": clean_name,
+                        "filename": uploaded_file.name,
+                        "completed": True,
+                    }
+
+                    completed_meta = retrained_pipeline["metadata"]
+
+                    progress_bar.progress(
+                        100,
+                        text="100% — Retraining completed",
+                    )
+                    retrain_status.update(
+                        label=f"✅ Retraining completed for {clean_name}",
+                        state="complete",
+                        expanded=True,
+                    )
+
+                    retrain_status.write(
+                        f"Held-out MAE: **{completed_meta['metrics_xgb']['mae']} kW**"
+                    )
+                    retrain_status.write(
+                        f"Held-out RMSE: **{completed_meta['metrics_xgb']['rmse']} kW**"
+                    )
+                    retrain_status.write(
+                        f"Breach Recall: **{completed_meta['metrics_xgb']['recall']}**"
+                    )
+                    retrain_status.write(
+                        f"False Alarm Ratio: **{completed_meta['metrics_xgb']['far']}**"
+                    )
+
+                    st.caption(
+                        f"Training: {completed_meta.get('train_period', 'N/A')}  |  "
+                        f"Validation: {completed_meta.get('validation_period', 'N/A')}  |  "
+                        f"Held-out test: {completed_meta.get('test_period', 'N/A')}"
+                    )
+
+                    st.success(
+                        "The uploaded depot is now active. The other dashboard pages "
+                        "will use this retrained model while this depot is selected."
+                    )
+
+                except Exception as retrain_exc:
+                    progress_bar.empty()
+                    retrain_status.update(
+                        label="❌ Retraining failed",
+                        state="error",
+                        expanded=True,
+                    )
+                    retrain_status.write(str(retrain_exc))
 
         except Exception as exc:
             st.error(f"Upload validation failed: {exc}")
