@@ -2558,22 +2558,44 @@ elif nav_selection == "⚙️ Model Performance":
     st.subheader(
         f"Held-Out Test Analysis — {y_test.index.min():%d %b %Y} to {y_test.index.max():%d %b %Y}"
     )
-    
-    # Full held-out test period (no short lookback truncation)
+
+    # Full held-out test metrics. The 7-day plots below are visual zooms only.
     residuals = y_test.values - xgb_predictions
     test_start_label = y_test.index.min().strftime("%d %b %Y")
     test_end_label = y_test.index.max().strftime("%d %b %Y")
     r2 = r2_score(y_test.values, xgb_predictions)
 
-    # Performance summary row for the selected depot / held-out period
+    zoom_days = 7
+    zoom_end = y_test.index.max()
+    zoom_start = zoom_end - pd.Timedelta(days=zoom_days)
+    zoom_mask = y_test.index >= zoom_start
+    y_test_zoom = y_test.loc[zoom_mask]
+    xgb_predictions_zoom = np.asarray(xgb_predictions)[zoom_mask]
+    residuals_zoom = residuals[zoom_mask]
+    zoom_start_label = y_test_zoom.index.min().strftime("%d %b %Y %H:%M")
+    zoom_end_label = y_test_zoom.index.max().strftime("%d %b %Y %H:%M")
+
+    # Performance summary row for the selected depot / full held-out period.
     ps1, ps2, ps3 = st.columns(3)
     ps1.metric("Held-out test period", f"{test_start_label} → {test_end_label}")
     ps2.metric("Test observations", f"{len(y_test):,}")
     ps3.metric("R²", f"{r2:.3f}")
 
-    # Plot 1: Actual vs Predicted Demand across the complete held-out test period
-    fig_avp = go.Figure()
-    fig_avp.add_trace(
+    st.info(
+        "The model-performance metrics use the complete untouched held-out test period. "
+        "A 7-day view is also shown below to make individual demand and residual patterns easier to interpret."
+    )
+
+    # ================================================================
+    # FULL HELD-OUT VIEW
+    # ================================================================
+    st.markdown("### Full Held-Out Test View")
+    st.caption(
+        "This is the complete evaluation window used for MAE, RMSE, R², breach recall and false alarm ratio."
+    )
+
+    fig_avp_full = go.Figure()
+    fig_avp_full.add_trace(
         go.Scatter(
             x=y_test.index,
             y=y_test.values,
@@ -2583,7 +2605,7 @@ elif nav_selection == "⚙️ Model Performance":
             hovertemplate="%{x|%d %b %Y %H:%M}<br>Actual: %{y:.2f} kW<extra></extra>",
         )
     )
-    fig_avp.add_trace(
+    fig_avp_full.add_trace(
         go.Scatter(
             x=y_test.index,
             y=xgb_predictions,
@@ -2593,7 +2615,7 @@ elif nav_selection == "⚙️ Model Performance":
             hovertemplate="%{x|%d %b %Y %H:%M}<br>Predicted: %{y:.2f} kW<extra></extra>",
         )
     )
-    fig_avp.update_layout(
+    fig_avp_full.update_layout(
         title={
             "text": "Actual vs Predicted Demand — Full Held-Out Test Period",
             "x": 0.01,
@@ -2604,37 +2626,34 @@ elif nav_selection == "⚙️ Model Performance":
         xaxis_title="Date",
         yaxis_title="Demand (kW)",
         template="plotly_white",
-        height=470,
+        height=450,
         hovermode="x unified",
         legend=dict(orientation="h", y=1.04, x=0.01, xanchor="left"),
         margin=dict(l=20, r=20, t=105, b=35),
     )
-    fig_avp.update_xaxes(
-        rangeslider=dict(visible=True, thickness=0.10),
+    fig_avp_full.update_xaxes(
+        rangeslider=dict(visible=True, thickness=0.08),
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
     )
-    fig_avp.update_yaxes(
+    fig_avp_full.update_yaxes(
         rangemode="tozero",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
     )
-    st.caption(
-        f"Held-out test window: **{test_start_label} – {test_end_label}**"
-    )
-    st.plotly_chart(fig_avp, use_container_width=True)
+    st.plotly_chart(fig_avp_full, use_container_width=True)
 
-    # Plot 2: Residuals across the complete held-out test period
     abs_res = np.abs(residuals)
     p95 = float(np.percentile(abs_res, 95))
-    fig_res = go.Figure()
-    fig_res.add_hrect(
+
+    fig_res_full = go.Figure()
+    fig_res_full.add_hrect(
         y0=-p95,
         y1=p95,
         fillcolor="rgba(16,185,129,0.08)",
         line_width=0,
     )
-    fig_res.add_trace(
+    fig_res_full.add_trace(
         go.Scatter(
             x=y_test.index,
             y=residuals,
@@ -2644,8 +2663,11 @@ elif nav_selection == "⚙️ Model Performance":
             hovertemplate="%{x|%d %b %Y %H:%M}<br>Residual: %{y:.2f} kW<extra></extra>",
         )
     )
-    fig_res.add_hline(y=0, line=dict(color="#64748B", dash="dash", width=1.2))
-    fig_res.update_layout(
+    fig_res_full.add_hline(
+        y=0,
+        line=dict(color="#64748B", dash="dash", width=1.2),
+    )
+    fig_res_full.update_layout(
         title={
             "text": "Residuals Over Time — Full Held-Out Test Period",
             "x": 0.01,
@@ -2656,20 +2678,129 @@ elif nav_selection == "⚙️ Model Performance":
         xaxis_title="Date",
         yaxis_title="Residual (kW)",
         template="plotly_white",
-        height=390,
+        height=380,
         hovermode="x unified",
         margin=dict(l=20, r=20, t=95, b=35),
     )
-    fig_res.update_xaxes(
-        rangeslider=dict(visible=True, thickness=0.10),
+    fig_res_full.update_xaxes(
+        rangeslider=dict(visible=True, thickness=0.08),
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
     )
-    fig_res.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
-    st.caption(
-        f"Shaded green region = ±95th percentile absolute residual (**{p95:.2f} kW**)"
+    fig_res_full.update_yaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
     )
-    st.plotly_chart(fig_res, use_container_width=True)
+    st.caption(
+        f"Shaded green region = ±95th percentile absolute residual (**{p95:.2f} kW**)."
+    )
+    st.plotly_chart(fig_res_full, use_container_width=True)
+
+    # ================================================================
+    # 7-DAY ZOOMED VIEW
+    # ================================================================
+    st.markdown("### 7-Day Zoomed Held-Out View")
+    st.caption(
+        f"Displayed window: **{zoom_start_label} – {zoom_end_label}**. "
+        "This is a visual zoom only; all formal model metrics above still use the full held-out test period."
+    )
+
+    fig_avp_zoom = go.Figure()
+    fig_avp_zoom.add_trace(
+        go.Scatter(
+            x=y_test_zoom.index,
+            y=y_test_zoom.values,
+            name="Actual Demand",
+            mode="lines",
+            line=dict(color="#0F172A", width=1.6),
+            hovertemplate="%{x|%d %b %Y %H:%M}<br>Actual: %{y:.2f} kW<extra></extra>",
+        )
+    )
+    fig_avp_zoom.add_trace(
+        go.Scatter(
+            x=y_test_zoom.index,
+            y=xgb_predictions_zoom,
+            name="XGBoost Prediction",
+            mode="lines",
+            line=dict(color="#10B981", width=1.4, dash="dash"),
+            hovertemplate="%{x|%d %b %Y %H:%M}<br>Predicted: %{y:.2f} kW<extra></extra>",
+        )
+    )
+    fig_avp_zoom.update_layout(
+        title={
+            "text": "Actual vs Predicted Demand — 7-Day Zoomed View",
+            "x": 0.01,
+            "xanchor": "left",
+            "y": 0.97,
+            "yanchor": "top",
+        },
+        xaxis_title="Date",
+        yaxis_title="Demand (kW)",
+        template="plotly_white",
+        height=450,
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.04, x=0.01, xanchor="left"),
+        margin=dict(l=20, r=20, t=105, b=35),
+    )
+    fig_avp_zoom.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_avp_zoom.update_yaxes(
+        rangemode="tozero",
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    st.plotly_chart(fig_avp_zoom, use_container_width=True)
+
+    fig_res_zoom = go.Figure()
+    fig_res_zoom.add_hrect(
+        y0=-p95,
+        y1=p95,
+        fillcolor="rgba(16,185,129,0.08)",
+        line_width=0,
+    )
+    fig_res_zoom.add_trace(
+        go.Scatter(
+            x=y_test_zoom.index,
+            y=residuals_zoom,
+            name="Residual (Actual - Predicted)",
+            mode="lines",
+            line=dict(color="#EF4444", width=1.15),
+            hovertemplate="%{x|%d %b %Y %H:%M}<br>Residual: %{y:.2f} kW<extra></extra>",
+        )
+    )
+    fig_res_zoom.add_hline(
+        y=0,
+        line=dict(color="#64748B", dash="dash", width=1.2),
+    )
+    fig_res_zoom.update_layout(
+        title={
+            "text": "Residuals Over Time — 7-Day Zoomed View",
+            "x": 0.01,
+            "xanchor": "left",
+            "y": 0.97,
+            "yanchor": "top",
+        },
+        xaxis_title="Date",
+        yaxis_title="Residual (kW)",
+        template="plotly_white",
+        height=380,
+        hovermode="x unified",
+        margin=dict(l=20, r=20, t=95, b=35),
+    )
+    fig_res_zoom.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_res_zoom.update_yaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    st.caption(
+        "The same ±95th percentile residual band from the full test period is retained so the zoomed chart remains directly comparable."
+    )
+    st.plotly_chart(fig_res_zoom, use_container_width=True)
 
     # Plot 3: Actual vs Predicted scatter — full held-out range only
     # One scatter view is retained to avoid redundant/less-informative zooming.
