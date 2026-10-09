@@ -9,6 +9,17 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 st.set_page_config(page_title="EV Depot Demand Forecaster", layout="wide")
 
+st.markdown("""
+<style>
+/* Keep full model-performance metric names visible on summary cards */
+div[data-testid="stMetricLabel"] p {
+    font-size: 0.82rem !important;
+    line-height: 1.15 !important;
+    white-space: normal !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ===================================================================== #
 # REAL UK POWER NETWORKS OPTIMISE PRIME DATA                             #
 # ===================================================================== #
