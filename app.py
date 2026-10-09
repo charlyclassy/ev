@@ -1077,10 +1077,12 @@ elif nav_selection == "⚙️ Settings / Admin":
     test_observations = model_meta.get("test_observations", len(y_test))
 
     s1, s2, s3, s4 = st.columns(4)
-    s1.metric("Model", "XGBoost (340 trees)")
+    s1.metric("Model", "XGBoost")
     s2.metric("Forecast horizon", f"{forecast_horizon} hours")
     s3.metric("Test rows", f"{int(test_observations):,}")
     s4.metric("Synthetic data", "No" if not synthetic_used else "Yes")
+
+    st.caption("Model configuration: **XGBoost with 340 trees**")
 
     st.markdown("#### Data split")
     split_df = pd.DataFrame({
