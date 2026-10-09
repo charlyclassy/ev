@@ -455,15 +455,98 @@ if nav_selection == "🏠 Home / Overview":
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Current Demand", f"{round(current_demand, 1)} kW")
     c2.metric("Predicted Peak Demand", f"{round(predicted_peak, 1)} kW")
-    c3.metric("Grid Capacity Limit", f"{st.session_state['grid_limit']} kW")
+    c3.metric("Planning Capacity Threshold", f"{st.session_state['grid_limit']} kW")
     c4.metric("Warning Lead Time", lead_time)
 
     st.subheader("Historical Headroom Footprint Profile")
+    st.caption("Recent historical demand profile for the selected depot.")
+
     lookback = min(192, len(history_series))
+    hist_x = history_series.index[-lookback:]
+    hist_y = history_series.values[-lookback:]
+
+    planning_threshold = float(st.session_state["grid_limit"])
+    warning_threshold = float(st.session_state["warn_threshold"])
+
+    peak_idx = int(np.argmax(hist_y))
+    peak_time = hist_x[peak_idx]
+    peak_value = float(hist_y[peak_idx])
+
     fig_home = go.Figure()
-    fig_home.add_trace(go.Scatter(x=history_series.index[-lookback:], y=history_series.values[-lookback:], name="Actual Demand", line=dict(color="#2563EB")))
-    fig_home.add_shape(type="line", x0=history_series.index[-lookback], x1=history_series.index[-1], y0=st.session_state["grid_limit"], y1=st.session_state["grid_limit"], line=dict(color="#EF4444", dash="dash"))
-    fig_home.update_layout(template="plotly_white", height=300, margin=dict(l=10, r=10, t=10, b=10))
+
+    fig_home.add_trace(
+        go.Scatter(
+            x=hist_x,
+            y=hist_y,
+            name="Actual Demand",
+            mode="lines",
+            line=dict(color="#2563EB", width=2.4),
+            hovertemplate="%{x|%d %b %Y %H:%M}<br>Actual demand: %{y:.2f} kW<extra></extra>",
+        )
+    )
+
+    # Warning threshold as a visible legend item.
+    fig_home.add_trace(
+        go.Scatter(
+            x=[hist_x[0], hist_x[-1]],
+            y=[warning_threshold, warning_threshold],
+            name="Warning Threshold",
+            mode="lines",
+            line=dict(color="#F59E0B", width=1.8, dash="dash"),
+            hovertemplate=f"Warning threshold: {warning_threshold:.1f} kW<extra></extra>",
+        )
+    )
+
+    # Planning capacity threshold as a visible legend item.
+    fig_home.add_trace(
+        go.Scatter(
+            x=[hist_x[0], hist_x[-1]],
+            y=[planning_threshold, planning_threshold],
+            name="Planning Capacity Threshold",
+            mode="lines",
+            line=dict(color="#EF4444", width=1.8, dash="dash"),
+            hovertemplate=f"Planning capacity threshold: {planning_threshold:.1f} kW<extra></extra>",
+        )
+    )
+
+    # Highlight the highest observed point in the displayed historical window.
+    fig_home.add_trace(
+        go.Scatter(
+            x=[peak_time],
+            y=[peak_value],
+            name="Historical Peak",
+            mode="markers",
+            marker=dict(size=10, symbol="diamond", color="#7C3AED"),
+            hovertemplate="%{x|%d %b %Y %H:%M}<br>Historical peak: %{y:.2f} kW<extra></extra>",
+        )
+    )
+
+    fig_home.update_layout(
+        template="plotly_white",
+        height=430,
+        xaxis_title="Time",
+        yaxis_title="Demand (kW)",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0.0,
+        ),
+        margin=dict(l=25, r=25, t=70, b=45),
+        hovermode="x unified",
+    )
+
+    fig_home.update_yaxes(
+        rangemode="tozero",
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_home.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.12)",
+    )
+
     st.plotly_chart(fig_home, use_container_width=True)
 
 elif nav_selection == "🏢 Depots Setup":
