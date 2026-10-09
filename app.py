@@ -32,6 +32,12 @@ DEPOT_CAPACITY_KW = {
 }
 WARNING_ALPHA = 0.80
 SAMPLING_MINUTES = 15
+
+# Fixed chronological project periods for the real Optimise Prime data.
+DATA_START = pd.Timestamp("2021-07-01")
+TRAIN_END = pd.Timestamp("2022-04-01")
+VALID_END = pd.Timestamp("2022-05-10")
+TEST_END = pd.Timestamp("2022-07-26")
 STEPS_PER_HOUR = 60 // SAMPLING_MINUTES
 STEPS_PER_DAY = 24 * STEPS_PER_HOUR
 STEPS_PER_WEEK = 7 * STEPS_PER_DAY
@@ -193,12 +199,28 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
     if len(feat) < STEPS_PER_WEEK * 2:
         raise ValueError("At least two weeks of 15-minute history are required for this model.")
 
-    split_idx = int(len(feat) * 0.80)
-    train_df = feat.iloc[:split_idx]
-    test_df = feat.iloc[split_idx:]
+    # Explicit chronological train / validation / held-out test split.
+    # The held-out test period is never used for fitting.
+    train_df = feat[(feat.index >= DATA_START) & (feat.index < TRAIN_END)].copy()
+    valid_df = feat[(feat.index >= TRAIN_END) & (feat.index < VALID_END)].copy()
+    test_df = feat[(feat.index >= VALID_END) & (feat.index < TEST_END)].copy()
+
+    if train_df.empty or valid_df.empty or test_df.empty:
+        raise ValueError(
+            "The selected depot does not cover the required project periods: "
+            "train Jul 2021-Mar 2022, validation Apr-9 May 2022, "
+            "held-out test 10 May-25 Jul 2022."
+        )
 
     X_train, y_train = train_df[feature_cols], train_df["Demand_kW"]
+    X_valid, y_valid = valid_df[feature_cols], valid_df["Demand_kW"]
     X_test, y_test = test_df[feature_cols], test_df["Demand_kW"]
+
+    # The 340-tree configuration was selected before final test evaluation.
+    # Refit on training + validation only, then score once on the untouched test period.
+    development_df = pd.concat([train_df, valid_df]).sort_index()
+    X_development = development_df[feature_cols]
+    y_development = development_df["Demand_kW"]
 
     model = xgb.XGBRegressor(
         n_estimators=340,
@@ -213,7 +235,7 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
         random_state=42,
         n_jobs=-1,
     )
-    model.fit(X_train, y_train)
+    model.fit(X_development, y_development)
 
     xgb_preds = np.clip(model.predict(X_test), 0, None)
     baseline_preds = test_df["Lag_96"].to_numpy()  # previous-day same-time baseline at 15-minute resolution
@@ -250,6 +272,8 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
         "target_variable": "Demand_kW",
         "features_used": feature_cols,
         "train_period": f"{train_df.index[0]:%Y-%m-%d} to {train_df.index[-1]:%Y-%m-%d}",
+        "validation_period": f"{valid_df.index[0]:%Y-%m-%d} to {valid_df.index[-1]:%Y-%m-%d}",
+        "final_fit_period": f"{development_df.index[0]:%Y-%m-%d} to {development_df.index[-1]:%Y-%m-%d}",
         "test_period": f"{test_df.index[0]:%Y-%m-%d} to {test_df.index[-1]:%Y-%m-%d}",
         "forecast_horizon_hours": horizon_hours,
         "synthetic_data_used": False,
@@ -492,26 +516,68 @@ elif nav_selection == "⚙️ Model Performance":
     }
     st.table(pd.DataFrame(tbl).set_index("Analytics Architecture Signature"))
 
-    st.subheader("Held-Out Validation Analysis Plots")
+    st.subheader("Held-Out Test Analysis — 10 May to 25 July 2022")
     
-    # Calculate chart lookback window dynamically based on data availability
-    lookback_window = min(168, len(y_test))
+    # Full held-out test period (no short lookback truncation)
     residuals = y_test.values - xgb_predictions
 
-    # Fix for Plot 1: Actual vs Predicted Demand
+    # Plot 1: Actual vs Predicted Demand across the complete held-out test period
     fig_avp = go.Figure()
-    fig_avp.add_trace(go.Scatter(x=y_test.index[-lookback_window:], y=y_test.values[-lookback_window:], name="Actual Demand", line=dict(color="#0F172A")))
-    fig_avp.add_trace(go.Scatter(x=y_test.index[-lookback_window:], y=xgb_predictions[-lookback_window:], name="XGBoost Prediction", line=dict(color="#10B981", dash="dash")))
-    fig_avp.update_layout(title="Actual vs Predicted Demand — Held-Out Test Period", template="plotly_white", height=350)
+    fig_avp.add_trace(
+        go.Scatter(
+            x=y_test.index,
+            y=y_test.values,
+            name="Actual Demand",
+            line=dict(color="#0F172A"),
+        )
+    )
+    fig_avp.add_trace(
+        go.Scatter(
+            x=y_test.index,
+            y=xgb_predictions,
+            name="XGBoost Prediction",
+            line=dict(color="#10B981", dash="dash"),
+        )
+    )
+    fig_avp.update_layout(
+        title="Actual vs Predicted Demand — Full Held-Out Test Period",
+        xaxis_title="Held-Out Test Period",
+        yaxis_title="Demand (kW)",
+        template="plotly_white",
+        height=420,
+        legend=dict(orientation="h", y=1.10),
+    )
+    fig_avp.update_xaxes(rangeslider=dict(visible=True))
     st.plotly_chart(fig_avp, use_container_width=True)
-    
-    # Fix for Plot 2: Residuals Over Time
+
+    # Plot 2: Residuals across the complete held-out test period
     fig_res = go.Figure()
-    fig_res.add_trace(go.Scatter(x=y_test.index[-lookback_window:], y=residuals[-lookback_window:], name="Residual (Actual - Pred)", line=dict(color="#EF4444")))
-    fig_res.add_shape(type="line", x0=y_test.index[-lookback_window], x1=y_test.index[-1], y0=0, y1=0, line=dict(color="#64748B", dash="dash"))
-    fig_res.update_layout(title="Residuals Over Time", template="plotly_white", height=300)
+    fig_res.add_trace(
+        go.Scatter(
+            x=y_test.index,
+            y=residuals,
+            name="Residual (Actual - Predicted)",
+            line=dict(color="#EF4444"),
+        )
+    )
+    fig_res.add_shape(
+        type="line",
+        x0=y_test.index[0],
+        x1=y_test.index[-1],
+        y0=0,
+        y1=0,
+        line=dict(color="#64748B", dash="dash"),
+    )
+    fig_res.update_layout(
+        title="Residuals Over Time — Full Held-Out Test Period",
+        xaxis_title="Held-Out Test Period",
+        yaxis_title="Residual (kW)",
+        template="plotly_white",
+        height=340,
+    )
+    fig_res.update_xaxes(rangeslider=dict(visible=True))
     st.plotly_chart(fig_res, use_container_width=True)
-    
+
     fig_scat = go.Figure()
     fig_scat.add_trace(go.Scatter(x=y_test.values, y=xgb_predictions, mode='markers', marker=dict(color='#2563EB', opacity=0.5), name="Predictions"))
     min_val = min(y_test.min(), xgb_predictions.min())
