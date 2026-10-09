@@ -1061,7 +1061,7 @@ elif nav_selection == "📜 Archive History":
     )
 
 elif nav_selection == "⚙️ Settings / Admin":
-    st.title("⚙️ Global Parameter Controls & Settings")
+    st.title("⚙️ Model Configuration & Evaluation")
     st.caption(
         "Model configuration and held-out evaluation summary for the selected depot."
     )
