@@ -11,6 +11,38 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 st.set_page_config(page_title="EV Depot Demand Forecaster", layout="wide")
 
 # ===================================================================== #
+# REAL UKPN OPTIMISE PRIME DEPOT REGISTRY                               #
+# Default capacities are planning thresholds derived from the training  #
+# period, not verified contracted grid connection limits.               #
+# ===================================================================== #
+REAL_DEPOTS = [
+    "Bexleyheath",
+    "Dartford",
+    "Islington",
+    "Mount Pleasant",
+    "Orpington",
+    "Premier Park",
+    "Whitechapel",
+    "Camden",
+    "Victoria",
+]
+
+DEPOT_CAPACITY_KW = {
+    "Bexleyheath": 17.0,
+    "Dartford": 45.0,
+    "Islington": 13.0,
+    "Mount Pleasant": 260.0,
+    "Orpington": 14.0,
+    "Premier Park": 70.0,
+    "Whitechapel": 55.0,
+    "Camden": 21.0,
+    "Victoria": 29.0,
+}
+
+WARNING_ALPHA = 0.80
+
+
+# ===================================================================== #
 # 1. CORE ENTERPRISE MACHINE LEARNING PIPELINE ENGINE (EMBEDDED BACKEND) #
 # ===================================================================== #
 @st.cache_resource
@@ -103,10 +135,10 @@ def execute_production_ml_pipeline(data_df=None):
     return pipeline_payload
 
 if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
-if "current_depot" not in st.session_state: st.session_state["current_depot"] = "London Central Depot"
+if "current_depot" not in st.session_state: st.session_state["current_depot"] = "Bexleyheath"
 if "org_name" not in st.session_state: st.session_state["org_name"] = "UK Power Networks Express"
-if "grid_limit" not in st.session_state: st.session_state["grid_limit"] = 650.0
-if "warn_threshold" not in st.session_state: st.session_state["warn_threshold"] = 520.0
+if "grid_limit" not in st.session_state: st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[st.session_state["current_depot"]]
+if "warn_threshold" not in st.session_state: st.session_state["warn_threshold"] = round(WARNING_ALPHA * st.session_state["grid_limit"], 1)
 if "forecast_horizon" not in st.session_state: st.session_state["forecast_horizon"] = 24
 if "uploaded_df" not in st.session_state: st.session_state["uploaded_df"] = None
 if "upload_meta" not in st.session_state: st.session_state["upload_meta"] = None
@@ -172,7 +204,15 @@ else:
 
 with st.sidebar:
     st.markdown(f"<h3 style='color: white;'>{st.session_state['org_name']}</h3>", unsafe_allow_html=True)
-    st.session_state["current_depot"] = st.selectbox("Select Active Depot Node:", ["London Central Depot", "Manchester East Hub", "Birmingham Logistics Node"])
+    selected_depot = st.selectbox(
+        "Select Active Depot Node:",
+        REAL_DEPOTS,
+        index=REAL_DEPOTS.index(st.session_state["current_depot"]) if st.session_state["current_depot"] in REAL_DEPOTS else 0,
+    )
+    if selected_depot != st.session_state["current_depot"]:
+        st.session_state["current_depot"] = selected_depot
+        st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[selected_depot]
+        st.session_state["warn_threshold"] = round(WARNING_ALPHA * DEPOT_CAPACITY_KW[selected_depot], 1)
     st.markdown("---")
     nav_selection = st.radio("Navigation Menu:", ["🏠 Home / Overview", "🏢 Depots Setup", "📊 Upload Depot Data", "📈 Live Demand Forecast", "🚗 Scenario Analysis", "⚙️ Model Performance", "🚨 System Alerts", "📋 Reports", "📜 Archive History", "⚙️ Settings / Admin"])
 
@@ -213,8 +253,8 @@ elif nav_selection == "🏢 Depots Setup":
     st.title("🏢 Depot Configuration Registry")
     with st.container(border=True):
         st.session_state["org_name"] = st.text_input("Organization Title", value=st.session_state["org_name"])
-        st.session_state["grid_limit"] = st.number_input("Depot Capacity Constraint Ceiling (kW)", value=st.session_state["grid_limit"], step=50.0)
-        st.session_state["warn_threshold"] = st.number_input("Proactive Warning Boundary (kW)", value=st.session_state["warn_threshold"], step=10.0)
+        st.session_state["grid_limit"] = st.number_input("Depot Capacity Constraint Ceiling (kW)", value=float(st.session_state["grid_limit"]), min_value=0.0, step=1.0)
+        st.session_state["warn_threshold"] = st.number_input("Proactive Warning Boundary (kW)", value=float(st.session_state["warn_threshold"]), min_value=0.0, step=1.0)
         if st.button("Persist Operational Configuration"):
             st.toast("Substation configuration targets saved successfully.")
 
