@@ -492,7 +492,12 @@ elif nav_selection == "📊 Upload Depot Data":
         st.button("Synchronize Pipeline Features & Re-train Model")
 
 elif nav_selection == "📈 Live Demand Forecast":
-    st.title("📈 Live Demand Forecast")
+    st.title("📈 Historical Demand & 24-Hour Forecast")
+    st.caption(
+        "Historical observed demand is shown up to the forecast start. "
+        "The dashed green line is the 24-hour XGBoost forecast based on the "
+        "latest available project data."
+    )
     
     fig = go.Figure()
     hist_x = history_series.index[-192:]
@@ -501,7 +506,7 @@ elif nav_selection == "📈 Live Demand Forecast":
     fig.add_trace(go.Scatter(x=future_x, y=horizon_forecast, name="XGBoost Forecast", line=dict(color="#10B981", dash="dash")))
     
     fig.add_shape(type="line", x0=hist_x[0], y0=st.session_state["grid_limit"], x1=future_x[-1], y1=st.session_state["grid_limit"], line=dict(color="#EF4444", width=2))
-    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='#EF4444', width=2), name='Grid Capacity Limit'))
+    fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='#EF4444', width=2), name='Planning Capacity Threshold'))
     
     fig.add_shape(type="line", x0=hist_x[0], y0=st.session_state["warn_threshold"], x1=future_x[-1], y1=st.session_state["warn_threshold"], line=dict(color="#F59E0B", dash="dot"))
     fig.add_trace(go.Scatter(x=[None], y=[None], mode='lines', line=dict(color='#F59E0B', dash='dot'), name='Warning Threshold'))
