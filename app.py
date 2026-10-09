@@ -990,14 +990,21 @@ elif nav_selection == "📜 Archive History":
         index=0,
     )
 
-    show_non_zero_only = st.checkbox(
-        "Show intervals with observed demand only",
-        value=True,
-        help=(
-            "Shows only rows where actual observed demand is greater than 0.01 kW. "
-            "Untick this box to inspect the complete held-out history."
-        ),
-    )
+    with st.container(border=True):
+        st.markdown("#### 🔎 Archive filter")
+        show_non_zero_only = st.checkbox(
+            "Show observed-demand intervals only",
+            value=True,
+            help=(
+                "When selected, the table shows only intervals where actual observed "
+                "demand is greater than 0.01 kW. Untick it to show all held-out intervals, "
+                "including zero-demand periods."
+            ),
+        )
+        st.caption(
+            "✓ Checked = observed-demand intervals only  |  "
+            "Unchecked = all held-out intervals"
+        )
 
     display_table = history_table.copy()
 
@@ -1017,7 +1024,7 @@ elif nav_selection == "📜 Archive History":
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Held-out observations", f"{total_rows:,}")
-    c2.metric("Rows matching filter", f"{shown_rows:,}")
+    c2.metric("Observed-demand intervals", f"{shown_rows:,}")
     c3.metric(
         "Observed-demand share",
         f"{(shown_rows / total_rows * 100):.1f}%" if show_non_zero_only and total_rows else "100.0%",
@@ -1049,7 +1056,7 @@ elif nav_selection == "📜 Archive History":
     )
 
     st.caption(
-        "Tip: untick **Show intervals with observed demand only** to inspect every held-out "
+        "Tip: untick **Show observed-demand intervals only** to inspect every held-out "
         "15-minute interval, including zero-demand periods."
     )
 
