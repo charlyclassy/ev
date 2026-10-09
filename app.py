@@ -954,19 +954,47 @@ elif nav_selection == "🚨 System Alerts":
 
 elif nav_selection == "📋 Reports":
     st.title("📋 Reports")
-    with st.container(border=True):
-        st.markdown(f"**Depot Node Matrix:** {st.session_state['current_depot']}")
-        st.markdown(f"**Model Core Target:** {model_meta['model_type']}")
-        st.markdown(f"**Capacity Cap Boundary:** {st.session_state['grid_limit']} kW")
-        st.markdown(f"**Pipeline Error Profile:** MAE {model_meta['metrics_xgb']['mae']} kW | RMSE {model_meta['metrics_xgb']['rmse']} kW")
-        
-        report_df = pd.DataFrame([{
-            "Depot Name": st.session_state['current_depot'], "Model Version": model_meta['model_type'],
-            "Capacity Limit kW": st.session_state['grid_limit'], "Predicted Peak kW": round(predicted_peak, 2),
-            "MAE kW": model_meta['metrics_xgb']['mae'], "RMSE kW": model_meta['metrics_xgb']['rmse'],
-            "Training Frame Start": model_meta['train_period'].split(' to ')[0], "Test Frame End": model_meta['test_period'].split(' to ')[1]
-        }])
-        st.download_button("Compile and Download Reports Bundle", data=report_df.to_csv(index=False).encode('utf-8'), file_name="Operational_Asset_Report.csv", mime="text/csv", use_container_width=True)
+    st.caption(
+        "Export a concise operational model report for the selected depot."
+    )
+
+    xgb_metrics = model_meta.get("metrics_xgb", {})
+
+    report_df = pd.DataFrame([{
+        "Depot Name": st.session_state["current_depot"],
+        "Model": "XGBoost",
+        "Trees": 340,
+        "Planning Capacity Threshold kW": round(float(st.session_state["grid_limit"]), 2),
+        "Forecast Horizon Hours": int(model_meta.get("forecast_horizon_hours", st.session_state["forecast_horizon"])),
+        "Predicted Peak kW": round(float(predicted_peak), 2),
+        "MAE kW": xgb_metrics.get("mae", "N/A"),
+        "RMSE kW": xgb_metrics.get("rmse", "N/A"),
+        "Breach Recall": xgb_metrics.get("recall", "N/A"),
+        "False Alarm Ratio": xgb_metrics.get("far", "N/A"),
+        "Training Period": model_meta.get("train_period", "Not available"),
+        "Validation Period": model_meta.get("validation_period", "Not available"),
+        "Held-out Test Period": model_meta.get("test_period", "Not available"),
+        "Test Rows": int(model_meta.get("test_observations", len(y_test))),
+        "Synthetic Data Used": "No" if not bool(model_meta.get("synthetic_data_used", False)) else "Yes",
+    }])
+
+    st.subheader("Operational Asset Report Preview")
+    st.dataframe(report_df, use_container_width=True, hide_index=True)
+
+    report_csv = report_df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        label="⬇️ Download Operational Asset Report (CSV)",
+        data=report_csv,
+        file_name=f"{st.session_state['current_depot'].replace(' ', '_')}_Operational_Asset_Report.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+
+    st.info(
+        "The planning capacity value shown in this report is the depot planning "
+        "threshold used by the application, not a verified contracted grid connection limit."
+    )
 
 elif nav_selection == "📜 Archive History":
     st.title("📜 Archive History")
