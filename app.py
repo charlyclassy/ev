@@ -514,15 +514,110 @@ elif nav_selection == "📈 Live Demand Forecast":
 
 elif nav_selection == "🚗 Scenario Analysis":
     st.title("🚗 Scenario Analysis")
-    growth = st.slider("Fleet Growth Percentage Multiplier (%)", 0, 100, 20)
+    st.caption(
+        "Scenario values are hypothetical adjustments applied to the genuine "
+        "XGBoost base forecast."
+    )
+
+    growth = st.slider(
+        "Projected Fleet / Demand Growth (%)",
+        min_value=0,
+        max_value=100,
+        value=20,
+        step=5,
+    )
+
     scenario_y = horizon_forecast * (1.0 + (growth / 100.0))
-    
-    fig_sc = go.Figure()
     timeline = future_times
-    fig_sc.add_trace(go.Scatter(x=timeline, y=horizon_forecast, name="XGBoost Forecast", line=dict(color="#64748B", dash="dot")))
-    fig_sc.add_trace(go.Scatter(x=timeline, y=scenario_y, name="Scenario-Adjusted Demand Curve", line=dict(color="#2563EB")))
-    fig_sc.update_layout(template="plotly_white", height=400)
+
+    planning_threshold = float(st.session_state["grid_limit"])
+    warning_threshold = float(st.session_state["warn_threshold"])
+    scenario_peak = float(np.max(scenario_y))
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Scenario Peak", f"{scenario_peak:.1f} kW")
+    c2.metric("Warning Threshold", f"{warning_threshold:.1f} kW")
+    c3.metric("Planning Capacity Threshold", f"{planning_threshold:.1f} kW")
+
+    fig_sc = go.Figure()
+
+    fig_sc.add_trace(
+        go.Scatter(
+            x=timeline,
+            y=horizon_forecast,
+            name="Base XGBoost Forecast",
+            mode="lines",
+            line=dict(color="#64748B", width=2, dash="dot"),
+            hovertemplate="%{x|%H:%M}<br>Base forecast: %{y:.2f} kW<extra></extra>",
+        )
+    )
+
+    fig_sc.add_trace(
+        go.Scatter(
+            x=timeline,
+            y=scenario_y,
+            name="Scenario-Adjusted Forecast",
+            mode="lines",
+            line=dict(color="#2563EB", width=2.5),
+            hovertemplate="%{x|%H:%M}<br>Scenario forecast: %{y:.2f} kW<extra></extra>",
+        )
+    )
+
+    fig_sc.add_hline(
+        y=warning_threshold,
+        line=dict(color="#F59E0B", width=1.8, dash="dash"),
+        annotation_text="Warning Threshold",
+        annotation_position="top left",
+    )
+
+    fig_sc.add_hline(
+        y=planning_threshold,
+        line=dict(color="#DC2626", width=1.8, dash="dash"),
+        annotation_text="Planning Capacity Threshold",
+        annotation_position="top left",
+    )
+
+    fig_sc.update_layout(
+        template="plotly_white",
+        height=440,
+        xaxis_title="Forecast Time",
+        yaxis_title="Demand (kW)",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="left",
+            x=0.0,
+        ),
+        margin=dict(l=25, r=25, t=65, b=45),
+        hovermode="x unified",
+    )
+
+    fig_sc.update_yaxes(
+        rangemode="tozero",
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_sc.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.12)",
+    )
+
     st.plotly_chart(fig_sc, use_container_width=True)
+
+    if scenario_peak >= planning_threshold:
+        st.warning(
+            "The hypothetical scenario exceeds the planning capacity threshold."
+        )
+    elif scenario_peak >= warning_threshold:
+        st.info(
+            "The hypothetical scenario reaches the warning threshold but remains "
+            "below the planning capacity threshold."
+        )
+    else:
+        st.caption(
+            "The hypothetical scenario remains below the warning threshold."
+        )
 
 elif nav_selection == "⚙️ Model Performance":
     st.title("⚙️ Model Performance")
