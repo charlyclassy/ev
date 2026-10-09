@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import json
 import numpy as np
 import plotly.graph_objects as go
 import xgboost as xgb
@@ -593,6 +594,83 @@ def regression_metrics_for_comparison(y_true, y_pred) -> dict:
         "r2": float(r2_score(y_true, y_pred)),
     }
 
+
+# ===================================================================== #
+# PERSISTED UPLOADED-DEPOT STATE                                        #
+# ===================================================================== #
+APP_STATE_DIR = Path(".app_state")
+UPLOADED_DEPOT_STATE_FILE = APP_STATE_DIR / "uploaded_depot_state.json"
+UPLOADED_DEPOT_DATA_FILE = APP_STATE_DIR / "uploaded_depot_data.csv"
+
+
+def save_uploaded_depot_state(
+    depot_name: str,
+    capacity_kw: float,
+    raw_df: pd.DataFrame,
+    filename: str,
+):
+    """
+    Persist the currently activated uploaded depot so it survives a browser
+    refresh within the same Streamlit app environment.
+    """
+    APP_STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    raw_df.to_csv(UPLOADED_DEPOT_DATA_FILE, index=False)
+
+    payload = {
+        "depot_name": depot_name,
+        "capacity_kw": float(capacity_kw),
+        "warning_kw": round(WARNING_ALPHA * float(capacity_kw), 1),
+        "filename": filename,
+        "data_file": str(UPLOADED_DEPOT_DATA_FILE),
+    }
+
+    UPLOADED_DEPOT_STATE_FILE.write_text(
+        json.dumps(payload, indent=2),
+        encoding="utf-8",
+    )
+
+
+def load_uploaded_depot_state():
+    """
+    Restore the last activated uploaded depot if persisted state exists.
+    Returns (metadata, dataframe) or (None, None).
+    """
+    if not UPLOADED_DEPOT_STATE_FILE.exists():
+        return None, None
+
+    try:
+        meta = json.loads(
+            UPLOADED_DEPOT_STATE_FILE.read_text(encoding="utf-8")
+        )
+
+        data_path = Path(
+            meta.get("data_file", str(UPLOADED_DEPOT_DATA_FILE))
+        )
+        if not data_path.exists():
+            return None, None
+
+        df = pd.read_csv(data_path)
+        if df.empty:
+            return None, None
+
+        return meta, df
+    except Exception:
+        return None, None
+
+
+_persisted_upload_meta, _persisted_upload_df = load_uploaded_depot_state()
+
+
+def remove_persisted_uploaded_depot():
+    """Delete persisted uploaded-depot data and metadata files."""
+    for path in [UPLOADED_DEPOT_STATE_FILE, UPLOADED_DEPOT_DATA_FILE]:
+        try:
+            if path.exists():
+                path.unlink()
+        except Exception:
+            pass
+
 # ===================================================================== #
 # SESSION STATE / UI                                                     #
 # ===================================================================== #
@@ -602,10 +680,33 @@ if "org_name" not in st.session_state: st.session_state["org_name"] = "Optivolt 
 if "grid_limit" not in st.session_state: st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[st.session_state["current_depot"]]
 if "warn_threshold" not in st.session_state: st.session_state["warn_threshold"] = round(WARNING_ALPHA * st.session_state["grid_limit"], 1)
 if "forecast_horizon" not in st.session_state: st.session_state["forecast_horizon"] = 24
-if "uploaded_df" not in st.session_state: st.session_state["uploaded_df"] = None
-if "upload_meta" not in st.session_state: st.session_state["upload_meta"] = None
-if "uploaded_depot_name" not in st.session_state: st.session_state["uploaded_depot_name"] = None
-if "uploaded_capacity_kw" not in st.session_state: st.session_state["uploaded_capacity_kw"] = None
+if "uploaded_df" not in st.session_state:
+    st.session_state["uploaded_df"] = (
+        _persisted_upload_df.copy()
+        if _persisted_upload_df is not None
+        else None
+    )
+if "upload_meta" not in st.session_state:
+    st.session_state["upload_meta"] = (
+        {
+            "filename": _persisted_upload_meta.get("filename"),
+            "persisted": True,
+        }
+        if _persisted_upload_meta is not None
+        else None
+    )
+if "uploaded_depot_name" not in st.session_state:
+    st.session_state["uploaded_depot_name"] = (
+        _persisted_upload_meta.get("depot_name")
+        if _persisted_upload_meta is not None
+        else None
+    )
+if "uploaded_capacity_kw" not in st.session_state:
+    st.session_state["uploaded_capacity_kw"] = (
+        float(_persisted_upload_meta.get("capacity_kw"))
+        if _persisted_upload_meta is not None
+        else None
+    )
 if "last_activated_upload_id" not in st.session_state: st.session_state["last_activated_upload_id"] = None
 if "upload_activation_notice" not in st.session_state: st.session_state["upload_activation_notice"] = None
 if "last_evaluated_upload_key" not in st.session_state: st.session_state["last_evaluated_upload_key"] = None
@@ -677,6 +778,9 @@ with st.sidebar:
         depot_options,
         index=current_index,
     )
+
+    if uploaded_depot_name and _persisted_upload_meta is not None:
+        st.caption(f"Saved uploaded depot: {uploaded_depot_name}")
 
     if selected_depot != st.session_state["current_depot"]:
         st.session_state["current_depot"] = selected_depot
@@ -1023,6 +1127,63 @@ elif nav_selection == "🏢 Depots Setup":
 
 elif nav_selection == "📊 Upload Depot Data":
     st.title("📊 Upload Depot Data")
+
+    if st.session_state.get("uploaded_depot_name"):
+        with st.container(border=True):
+            st.markdown("### Saved Uploaded Depot")
+            st.write(
+                f"**Depot:** {st.session_state['uploaded_depot_name']}"
+            )
+            st.caption(
+                "Removing this depot will delete its persisted uploaded telemetry "
+                "and remove it from the left-hand depot selector."
+            )
+
+            confirm_remove = st.checkbox(
+                "I understand this will remove the saved uploaded depot from this app.",
+                key="confirm_remove_uploaded_depot",
+            )
+
+            if st.button(
+                "Remove Uploaded Depot",
+                use_container_width=True,
+                disabled=not confirm_remove,
+            ):
+                remove_persisted_uploaded_depot()
+
+                # Clear all uploaded-depot related session state.
+                for key in [
+                    "uploaded_df",
+                    "upload_meta",
+                    "uploaded_depot_name",
+                    "uploaded_capacity_kw",
+                    "last_activated_upload_id",
+                    "upload_activation_notice",
+                    "last_evaluated_upload_key",
+                    "uploaded_evaluation_summary",
+                    "trained_upload_id",
+                    "trained_upload_filename",
+                    "retraining_completion_summary",
+                ]:
+                    if key in st.session_state:
+                        st.session_state[key] = None
+
+                # Return safely to a built-in depot.
+                fallback_depot = "Bexleyheath"
+                st.session_state["current_depot"] = fallback_depot
+                st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[fallback_depot]
+                st.session_state["warn_threshold"] = round(
+                    WARNING_ALPHA * DEPOT_CAPACITY_KW[fallback_depot],
+                    1,
+                )
+
+                # Clear cached model resources so the next run reloads clean state.
+                execute_production_ml_pipeline.clear()
+
+                st.success(
+                    "Uploaded depot removed. Returning to Bexleyheath."
+                )
+                st.rerun()
 
     st.markdown("### Import depot telemetry data")
     st.caption(
@@ -1637,6 +1798,14 @@ elif nav_selection == "📊 Upload Depot Data":
                     st.session_state["last_activated_upload_id"] = upload_id
                     st.session_state["trained_upload_id"] = upload_id
                     st.session_state["trained_upload_filename"] = uploaded_file.name
+
+                    save_uploaded_depot_state(
+                        clean_name,
+                        float(uploaded_capacity),
+                        raw_uploaded_df,
+                        uploaded_file.name,
+                    )
+
                     st.session_state["upload_activation_notice"] = {
                         "depot": clean_name,
                         "filename": uploaded_file.name,
