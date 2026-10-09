@@ -1739,9 +1739,8 @@ elif nav_selection == "⚙️ Settings / Admin":
     )
 
     st.info(
-        "All XGBoost and baseline metrics shown here are calculated from the same "
-        "untouched held-out test rows. The held-out test data are not used to fit "
-        "the final model."
+        "XGBoost and baseline metrics use the same untouched held-out test rows. "
+        "The held-out test data are not used to fit the final model."
     )
 
     with st.expander("Technical metadata"):
