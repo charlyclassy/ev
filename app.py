@@ -465,31 +465,44 @@ elif nav_selection == "🏢 Depots Setup":
 
 elif nav_selection == "📊 Upload Depot Data":
     st.title("📊 Upload Depot Data")
-    uploaded_file = st.file_uploader("Import telemetry log streams", type=["csv", "xlsx"])
+
+    st.markdown("### Import depot telemetry data")
+    st.caption(
+        "Upload historical or current depot telemetry data for forecasting and analysis."
+    )
+    st.markdown(
+        "**Supported formats:** CSV, XLSX  •  **Maximum file size:** 200 MB"
+    )
+
+    uploaded_file = st.file_uploader(
+        "Upload depot telemetry file",
+        type=["csv", "xlsx"],
+        label_visibility="collapsed",
+    )
+
     if uploaded_file is not None:
         try:
-            df_raw = pd.read_csv(uploaded_file) if uploaded_file.name.endswith(".csv") else pd.read_excel(uploaded_file)
-            rows_count = len(df_raw)
-            t_col = [c for c in df_raw.columns if 'time' in c.lower() or 'date' in c.lower()][0]
-            d_col = [c for c in df_raw.columns if 'demand' in c.lower() or 'load' in c.lower() or 'kw' in c.lower()][0]
-            
-            # Locks file fields securely inside global Session State memory
-            st.session_state["uploaded_df"] = df_raw[[t_col, d_col]].rename(columns={t_col: "Timestamp", d_col: "Demand_kW"})
-            st.session_state["data_source_status"] = "Real Processed Depot Data"
-            
+            if uploaded_file.name.lower().endswith(".csv"):
+                uploaded_df = pd.read_csv(uploaded_file)
+            else:
+                uploaded_df = pd.read_excel(uploaded_file)
+
+            st.session_state["uploaded_df"] = uploaded_df
             st.session_state["upload_meta"] = {
-                "Rows loaded": rows_count, "Timestamp column": t_col, "Demand column": d_col,
-                "Date range": f"{df_raw[t_col].min()} to {df_raw[t_col].max()}",
-                "Missing values": int(df_raw[d_col].isna().sum()), "Sampling interval": "15-minute chronological grid",
-                "Validation check": "Passed / Success"
-                }
-            st.success("🟢 Ingestion validated successfully. Data pipeline features refreshed globally.")
-        except Exception as e:
-            st.error(f"Inbound configuration error parsing file: {e}")
-            
-    if st.session_state["upload_meta"] is not None:
-        st.json(st.session_state["upload_meta"])
-        st.button("Synchronize Pipeline Features & Re-train Model")
+                "filename": uploaded_file.name,
+                "rows": len(uploaded_df),
+                "columns": list(uploaded_df.columns),
+            }
+
+            st.success(
+                f"Uploaded {uploaded_file.name} successfully "
+                f"({len(uploaded_df):,} rows)."
+            )
+            st.dataframe(uploaded_df.head(20), use_container_width=True)
+
+        except Exception as exc:
+            st.error(f"Could not read the uploaded file: {exc}")
+
 
 elif nav_selection == "📈 Demand Forecast":
     st.markdown(
