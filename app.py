@@ -1815,17 +1815,24 @@ elif nav_selection == "📊 Upload Depot Data":
                         )
                     )
                     fig_retrain_ts.update_layout(
-                        title="Held-Out Demand: Before vs After Retraining",
+                        title=dict(
+                            text="Held-Out Demand: Before vs After Retraining",
+                            x=0.0,
+                            xanchor="left",
+                            y=0.98,
+                            yanchor="top",
+                        ),
                         xaxis_title="Timestamp",
                         yaxis_title="Demand (kW)",
                         hovermode="x unified",
-                        height=440,
-                        margin=dict(l=55, r=25, t=85, b=55),
+                        height=470,
+                        margin=dict(l=60, r=30, t=125, b=60),
                         legend=dict(
                             orientation="h",
-                            y=1.10,
+                            y=1.04,
                             x=0,
                             yanchor="bottom",
+                            xanchor="left",
                         ),
                     )
                     st.plotly_chart(fig_retrain_ts, use_container_width=True)
@@ -1870,17 +1877,24 @@ elif nav_selection == "📊 Upload Depot Data":
                         )
                     )
                     fig_metric_compare.update_layout(
-                        title="Error Metrics Before vs After Retraining",
+                        title=dict(
+                            text="Error Metrics Before vs After Retraining",
+                            x=0.0,
+                            xanchor="left",
+                            y=0.98,
+                            yanchor="top",
+                        ),
                         xaxis_title="Metric",
-                        yaxis_title="Error (kW)",
+                        yaxis_title="Error (kW) — lower is better",
                         barmode="group",
-                        height=390,
-                        margin=dict(l=55, r=25, t=85, b=55),
+                        height=420,
+                        margin=dict(l=60, r=30, t=120, b=60),
                         legend=dict(
                             orientation="h",
-                            y=1.10,
+                            y=1.04,
                             x=0,
                             yanchor="bottom",
+                            xanchor="left",
                         ),
                     )
                     st.plotly_chart(
@@ -1892,44 +1906,87 @@ elif nav_selection == "📊 Upload Depot Data":
                     before_resid = comp_actual - comp_existing
                     after_resid = comp_actual - comp_retrained
 
+                    resid_min = float(min(np.min(before_resid), np.min(after_resid)))
+                    resid_max = float(max(np.max(before_resid), np.max(after_resid)))
+                    bin_size = max((resid_max - resid_min) / 45.0, 0.25)
+
+                    before_mean = float(np.mean(before_resid))
+                    after_mean = float(np.mean(after_resid))
+                    before_median = float(np.median(before_resid))
+                    after_median = float(np.median(after_resid))
+
                     fig_resid_compare = go.Figure()
                     fig_resid_compare.add_trace(
                         go.Histogram(
                             x=before_resid,
-                            nbinsx=45,
+                            xbins=dict(
+                                start=resid_min,
+                                end=resid_max,
+                                size=bin_size,
+                            ),
                             name="Before Retraining",
-                            opacity=0.55,
+                            opacity=0.50,
                         )
                     )
                     fig_resid_compare.add_trace(
                         go.Histogram(
                             x=after_resid,
-                            nbinsx=45,
+                            xbins=dict(
+                                start=resid_min,
+                                end=resid_max,
+                                size=bin_size,
+                            ),
                             name="After Retraining",
-                            opacity=0.55,
+                            opacity=0.50,
                         )
                     )
-                    fig_resid_compare.add_vline(
-                        x=0,
-                        line_dash="dash",
+
+                    # Zero-error reference as a trace so it appears cleanly in the legend.
+                    hist_max = max(
+                        np.histogram(before_resid, bins=45, range=(resid_min, resid_max))[0].max(),
+                        np.histogram(after_resid, bins=45, range=(resid_min, resid_max))[0].max(),
                     )
+                    fig_resid_compare.add_trace(
+                        go.Scatter(
+                            x=[0, 0],
+                            y=[0, float(hist_max) * 1.08],
+                            mode="lines",
+                            name="Zero Error",
+                            line=dict(dash="dash", width=2),
+                            hoverinfo="skip",
+                        )
+                    )
+
                     fig_resid_compare.update_layout(
-                        title="Held-Out Residual Distribution Before vs After Retraining",
+                        title=dict(
+                            text="Held-Out Residual Distribution Before vs After Retraining",
+                            x=0.0,
+                            xanchor="left",
+                            y=0.98,
+                            yanchor="top",
+                        ),
                         xaxis_title="Residual (Actual − Predicted) kW",
                         yaxis_title="Frequency",
                         barmode="overlay",
-                        height=410,
-                        margin=dict(l=55, r=25, t=85, b=55),
+                        height=440,
+                        margin=dict(l=60, r=30, t=125, b=60),
                         legend=dict(
                             orientation="h",
-                            y=1.10,
+                            y=1.04,
                             x=0,
                             yanchor="bottom",
+                            xanchor="left",
                         ),
                     )
                     st.plotly_chart(
                         fig_resid_compare,
                         use_container_width=True,
+                    )
+                    st.caption(
+                        f"Residual = Actual − Predicted. "
+                        f"Before retraining: mean {before_mean:.2f} kW, median {before_median:.2f} kW. "
+                        f"After retraining: mean {after_mean:.2f} kW, median {after_median:.2f} kW. "
+                        "A tighter distribution centred closer to zero indicates better calibration."
                     )
 
                     mae_change = before_m["mae"] - after_m["mae"]
