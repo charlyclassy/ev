@@ -3,30 +3,22 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 import xgboost as xgb
-import os
-import json
+from pathlib import Path
 from datetime import datetime, timedelta
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 st.set_page_config(page_title="EV Depot Demand Forecaster", layout="wide")
 
 # ===================================================================== #
-# REAL UKPN OPTIMISE PRIME DEPOT REGISTRY                               #
-# Default capacities are planning thresholds derived from the training  #
-# period, not verified contracted grid connection limits.               #
+# REAL UK POWER NETWORKS OPTIMISE PRIME DATA                             #
 # ===================================================================== #
 REAL_DEPOTS = [
-    "Bexleyheath",
-    "Dartford",
-    "Islington",
-    "Mount Pleasant",
-    "Orpington",
-    "Premier Park",
-    "Whitechapel",
-    "Camden",
-    "Victoria",
+    "Bexleyheath", "Dartford", "Islington", "Mount Pleasant",
+    "Orpington", "Premier Park", "Whitechapel", "Camden", "Victoria",
 ]
 
+# These are default PLANNING thresholds derived from the training-period
+# demand profile. They are not claimed to be contracted grid connection limits.
 DEPOT_CAPACITY_KW = {
     "Bexleyheath": 17.0,
     "Dartford": 45.0,
@@ -38,102 +30,222 @@ DEPOT_CAPACITY_KW = {
     "Camden": 21.0,
     "Victoria": 29.0,
 }
-
 WARNING_ALPHA = 0.80
+SAMPLING_MINUTES = 15
+STEPS_PER_HOUR = 60 // SAMPLING_MINUTES
+STEPS_PER_DAY = 24 * STEPS_PER_HOUR
+STEPS_PER_WEEK = 7 * STEPS_PER_DAY
+
+BUNDLED_DATA_CANDIDATES = [
+    Path("data/processed/depot_demand.csv"),
+    Path("UKPN_OptimisePrime_9_Depots_Processed.csv"),
+]
 
 
-# ===================================================================== #
-# 1. CORE ENTERPRISE MACHINE LEARNING PIPELINE ENGINE (EMBEDDED BACKEND) #
-# ===================================================================== #
-@st.cache_resource
-def execute_production_ml_pipeline(data_df=None):
-    if data_df is None:
-        timestamps = pd.date_range(start="2026-08-01", end="2026-10-05", freq="h")
-        np.random.seed(42)
-        base_load = 400 + 120 * np.sin(2 * np.pi * timestamps.hour / 24)
-        weekly_drift = 35 * np.cos(2 * np.pi * timestamps.dayofweek / 7)
-        charging_peaks = np.where((timestamps.hour >= 17) & (timestamps.hour <= 22), 160 + np.random.normal(0, 10, len(timestamps)), 0)
-        noise = np.random.normal(0, 5, len(timestamps))
-        load = np.clip(base_load + weekly_drift + charging_peaks + noise, 0, None)
-        df = pd.DataFrame({"Timestamp": timestamps, "Demand_kW": load})
-    else:
-        df = data_df.copy()
+def _bundled_data_path() -> Path:
+    for path in BUNDLED_DATA_CANDIDATES:
+        if path.exists():
+            return path
+    raise FileNotFoundError(
+        "Real Optimise Prime data was not found. Put the combined real dataset at "
+        "data/processed/depot_demand.csv in the GitHub repository."
+    )
 
-    df.columns = [c.strip() for c in df.columns]
-    
+
+@st.cache_data(show_spinner=False)
+def load_real_depot_data(depot_name: str) -> pd.DataFrame:
+    """Load one genuine Optimise Prime depot from the combined processed file."""
+    path = _bundled_data_path()
+    raw = pd.read_csv(path, parse_dates=["timestamp"], dtype={"depot_id": str})
+    required = {"timestamp", "depot_id", "demand_kw"}
+    missing = required.difference(raw.columns)
+    if missing:
+        raise ValueError(f"Real depot file is missing columns: {sorted(missing)}")
+
+    df = raw.loc[raw["depot_id"].astype(str) == depot_name, ["timestamp", "demand_kw"]].copy()
+    if df.empty:
+        raise ValueError(f"No rows found for depot '{depot_name}' in {path}.")
+
+    df = df.rename(columns={"timestamp": "Timestamp", "demand_kw": "Demand_kW"})
+    return df.sort_values("Timestamp").reset_index(drop=True)
+
+
+def _standardise_input(data_df: pd.DataFrame) -> pd.DataFrame:
+    df = data_df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
     if "Timestamp" not in df.columns or "Demand_kW" not in df.columns:
-        t_col = [c for c in df.columns if 'time' in c.lower() or 'date' in c.lower()][0]
-        d_col = [c for c in df.columns if 'demand' in c.lower() or 'load' in c.lower() or 'kw' in c.lower()][0]
-        df = df[[t_col, d_col]].rename(columns={t_col: "Timestamp", d_col: "Demand_kW"})
+        time_candidates = [c for c in df.columns if "time" in c.lower() or "date" in c.lower()]
+        demand_candidates = [c for c in df.columns if "demand" in c.lower() or "load" in c.lower() or "kw" in c.lower()]
+        if not time_candidates or not demand_candidates:
+            raise ValueError("The data needs a timestamp column and a demand/load kW column.")
+        df = df[[time_candidates[0], demand_candidates[0]]].rename(
+            columns={time_candidates[0]: "Timestamp", demand_candidates[0]: "Demand_kW"}
+        )
 
-    df["Timestamp"] = pd.to_datetime(df["Timestamp"])
-    df["Demand_kW"] = pd.to_numeric(df["Demand_kW"], errors='coerce').ffill().bfill()
-    df = df.set_index("Timestamp").sort_index()
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
+    df["Demand_kW"] = pd.to_numeric(df["Demand_kW"], errors="coerce")
+    df = df.dropna(subset=["Timestamp", "Demand_kW"])
+    df = df.groupby("Timestamp", as_index=False)["Demand_kW"].mean().sort_values("Timestamp")
+    df["Demand_kW"] = df["Demand_kW"].clip(lower=0)
 
-    df['hour'] = df.index.hour
-    df['day_of_week'] = df.index.dayofweek
-    df['month'] = df.index.month
-    df['weekend_flag'] = np.where(df['day_of_week'] >= 5, 1, 0)
-    
-    df['Lag_1'] = df['Demand_kW'].shift(1)
-    df['Lag_24'] = df['Demand_kW'].shift(24)
-    df['Rolling_mean_3'] = df['Demand_kW'].shift(1).rolling(window=3).mean()
-    df['Rolling_mean_6'] = df['Demand_kW'].shift(1).rolling(window=6).mean()
-    df['Rolling_mean_24'] = df['Demand_kW'].shift(1).rolling(window=24).mean()
-    df = df.ffill().bfill()
+    # Harmonise uploaded data to the real model's 15-minute grid.
+    df = df.set_index("Timestamp").resample(f"{SAMPLING_MINUTES}min").mean()
+    df["Demand_kW"] = df["Demand_kW"].interpolate(limit=4, limit_direction="forward").ffill()
+    df = df.dropna(subset=["Demand_kW"])
+    return df
 
-    feature_cols = ['hour', 'day_of_week', 'month', 'weekend_flag', 'Lag_1', 'Lag_24', 'Rolling_mean_3', 'Rolling_mean_6', 'Rolling_mean_24']
 
-    split_idx = int(len(df) * 0.8)
-    train_df = df.iloc[:split_idx]
-    test_df = df.iloc[split_idx:]
+def _build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Causal time-series features: every demand feature uses past observations only."""
+    feat = df.copy()
+    hour_decimal = feat.index.hour + feat.index.minute / 60.0
+    feat["hour_sin"] = np.sin(2 * np.pi * hour_decimal / 24.0)
+    feat["hour_cos"] = np.cos(2 * np.pi * hour_decimal / 24.0)
+    feat["day_of_week"] = feat.index.dayofweek
+    feat["weekend_flag"] = (feat.index.dayofweek >= 5).astype(int)
+    feat["month"] = feat.index.month
 
-    X_train, y_train = train_df[feature_cols], train_df['Demand_kW']
-    X_test, y_test = test_df[feature_cols], test_df['Demand_kW']
+    feat["Lag_1"] = feat["Demand_kW"].shift(1)
+    feat["Lag_4"] = feat["Demand_kW"].shift(STEPS_PER_HOUR)
+    feat["Lag_96"] = feat["Demand_kW"].shift(STEPS_PER_DAY)
+    feat["Lag_672"] = feat["Demand_kW"].shift(STEPS_PER_WEEK)
+    past = feat["Demand_kW"].shift(1)
+    feat["Rolling_mean_4"] = past.rolling(STEPS_PER_HOUR).mean()
+    feat["Rolling_mean_24"] = past.rolling(6 * STEPS_PER_HOUR).mean()
+    feat["Rolling_mean_96"] = past.rolling(STEPS_PER_DAY).mean()
+    feat["Rolling_std_96"] = past.rolling(STEPS_PER_DAY).std()
 
-    model = xgb.XGBRegressor(n_estimators=100, max_depth=5, learning_rate=0.05, random_state=42)
+    features = [
+        "hour_sin", "hour_cos", "day_of_week", "weekend_flag", "month",
+        "Lag_1", "Lag_4", "Lag_96", "Lag_672",
+        "Rolling_mean_4", "Rolling_mean_24", "Rolling_mean_96", "Rolling_std_96",
+    ]
+    return feat.dropna(subset=features + ["Demand_kW"]), features
+
+
+def _recursive_forecast(model, history: pd.Series, feature_cols: list[str], horizon_hours: int):
+    """Genuine multi-step forecast: each prediction becomes history for the next step."""
+    history = history.astype(float).copy().sort_index()
+    steps = int(horizon_hours * STEPS_PER_HOUR)
+    future_times, preds = [], []
+
+    for _ in range(steps):
+        ts = history.index[-1] + pd.Timedelta(minutes=SAMPLING_MINUTES)
+        hour_decimal = ts.hour + ts.minute / 60.0
+        row = {
+            "hour_sin": np.sin(2 * np.pi * hour_decimal / 24.0),
+            "hour_cos": np.cos(2 * np.pi * hour_decimal / 24.0),
+            "day_of_week": ts.dayofweek,
+            "weekend_flag": int(ts.dayofweek >= 5),
+            "month": ts.month,
+            "Lag_1": history.iloc[-1],
+            "Lag_4": history.iloc[-STEPS_PER_HOUR],
+            "Lag_96": history.iloc[-STEPS_PER_DAY],
+            "Lag_672": history.iloc[-STEPS_PER_WEEK],
+            "Rolling_mean_4": history.iloc[-STEPS_PER_HOUR:].mean(),
+            "Rolling_mean_24": history.iloc[-6 * STEPS_PER_HOUR:].mean(),
+            "Rolling_mean_96": history.iloc[-STEPS_PER_DAY:].mean(),
+            "Rolling_std_96": history.iloc[-STEPS_PER_DAY:].std(),
+        }
+        X_next = pd.DataFrame([[row[c] for c in feature_cols]], columns=feature_cols)
+        pred = max(0.0, float(model.predict(X_next)[0]))
+        history.loc[ts] = pred
+        future_times.append(ts)
+        preds.append(pred)
+
+    return pd.DatetimeIndex(future_times), np.asarray(preds, dtype=float)
+
+
+@st.cache_resource(show_spinner=False)
+def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_hours: int, uploaded_df=None):
+    """Train/evaluate on real selected-depot data; never generate synthetic demand."""
+    source_df = uploaded_df.copy() if uploaded_df is not None else load_real_depot_data(depot_name)
+    df = _standardise_input(source_df)
+    feat, feature_cols = _build_features(df)
+
+    if len(feat) < STEPS_PER_WEEK * 2:
+        raise ValueError("At least two weeks of 15-minute history are required for this model.")
+
+    split_idx = int(len(feat) * 0.80)
+    train_df = feat.iloc[:split_idx]
+    test_df = feat.iloc[split_idx:]
+
+    X_train, y_train = train_df[feature_cols], train_df["Demand_kW"]
+    X_test, y_test = test_df[feature_cols], test_df["Demand_kW"]
+
+    model = xgb.XGBRegressor(
+        n_estimators=340,
+        max_depth=7,
+        learning_rate=0.03,
+        min_child_weight=10,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        reg_lambda=1.0,
+        objective="reg:squarederror",
+        tree_method="hist",
+        random_state=42,
+        n_jobs=-1,
+    )
     model.fit(X_train, y_train)
 
     xgb_preds = np.clip(model.predict(X_test), 0, None)
-    baseline_preds = test_df['Lag_24'].values
-    errors = y_test.values - xgb_preds
+    baseline_preds = test_df["Lag_96"].to_numpy()  # previous-day same-time baseline at 15-minute resolution
+    errors = y_test.to_numpy() - xgb_preds
 
-    threshold = 520.0
     def compute_metrics(y_true, y_pred):
+        y_true = np.asarray(y_true, dtype=float)
+        y_pred = np.asarray(y_pred, dtype=float)
         mae = round(mean_absolute_error(y_true, y_pred), 2)
         rmse = round(np.sqrt(mean_squared_error(y_true, y_pred)), 2)
-        actual_breach = y_true > threshold
-        pred_breach = y_pred > threshold
-        t_breaches = np.sum(actual_breach)
-        recall = f"{round((np.sum(actual_breach & pred_breach) / t_breaches) * 100, 2)}%" if t_breaches > 0 else "N/A"
-        t_safe = np.sum(~actual_breach)
-        far = f"{round((np.sum((~actual_breach) & pred_breach) / t_safe) * 100, 2)}%" if t_safe > 0 else "0.0%"
-        return mae, rmse, recall, far
+        actual_breach = y_true >= capacity_kw
+        pred_breach = y_pred >= capacity_kw
+        tp = int(np.sum(actual_breach & pred_breach))
+        fp = int(np.sum((~actual_breach) & pred_breach))
+        fn = int(np.sum(actual_breach & (~pred_breach)))
+        recall = f"{100 * tp / (tp + fn):.2f}%" if (tp + fn) else "N/A"
+        false_alarm_ratio = f"{100 * fp / (tp + fp):.2f}%" if (tp + fp) else "N/A"
+        return mae, rmse, recall, false_alarm_ratio
 
-    mae_xgb, rmse_xgb, recall_xgb, far_xgb = compute_metrics(y_test.values, xgb_preds)
-    mae_base, rmse_base, recall_base, far_base = compute_metrics(y_test.values, baseline_preds)
+    mae_xgb, rmse_xgb, recall_xgb, far_xgb = compute_metrics(y_test, xgb_preds)
+    mae_base, rmse_base, recall_base, far_base = compute_metrics(y_test, baseline_preds)
+
+    # Forecast beyond the final real observation. This is not a shifted test prediction.
+    history_series = df["Demand_kW"].copy()
+    future_times, future_forecast = _recursive_forecast(model, history_series, feature_cols, horizon_hours)
 
     summary_metadata = {
-        "model_type": "XGBoost Global Demand Forecast Model v2.4.1",
+        "model_type": "XGBoost 340-Tree Depot Demand Forecast Model",
         "training_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "dataset_source": "UK Power Networks / Optimise Prime Commercial EV Trials",
+        "dataset_source": "UK Power Networks / Optimise Prime WS2 depot trial",
+        "selected_depot": depot_name,
         "total_rows": len(df),
+        "sampling_interval": "15 minutes",
         "target_variable": "Demand_kW",
         "features_used": feature_cols,
-        "train_period": f"{train_df.index[0].strftime('%Y-%m-%d')} to {train_df.index[-1].strftime('%Y-%m-%d')}",
-        "test_period": f"{test_df.index[0].strftime('%Y-%m-%d')} to {test_df.index[-1].strftime('%Y-%m-%d')}",
-        "forecast_horizon_hours": 24,
-        "saved_model_filename": "Embedded Operational Architecture",
+        "train_period": f"{train_df.index[0]:%Y-%m-%d} to {train_df.index[-1]:%Y-%m-%d}",
+        "test_period": f"{test_df.index[0]:%Y-%m-%d} to {test_df.index[-1]:%Y-%m-%d}",
+        "forecast_horizon_hours": horizon_hours,
+        "synthetic_data_used": False,
         "metrics_xgb": {"mae": mae_xgb, "rmse": rmse_xgb, "recall": recall_xgb, "far": far_xgb},
-        "metrics_baseline": {"mae": mae_base, "rmse": rmse_base, "recall": recall_base, "far": far_base}
+        "metrics_baseline": {"mae": mae_base, "rmse": rmse_base, "recall": recall_base, "far": far_base},
     }
 
-    pipeline_payload = {
-        "metadata": summary_metadata, "y_test": y_test,
-        "xgb_preds": xgb_preds, "baseline_preds": baseline_preds, "errors": errors
+    return {
+        "metadata": summary_metadata,
+        "history": history_series,
+        "y_test": y_test,
+        "xgb_preds": xgb_preds,
+        "baseline_preds": baseline_preds,
+        "errors": errors,
+        "future_times": future_times,
+        "future_forecast": future_forecast,
     }
-    return pipeline_payload
 
+
+# ===================================================================== #
+# SESSION STATE / UI                                                     #
+# ===================================================================== #
 if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
 if "current_depot" not in st.session_state: st.session_state["current_depot"] = "Bexleyheath"
 if "org_name" not in st.session_state: st.session_state["org_name"] = "UK Power Networks Express"
@@ -142,7 +254,7 @@ if "warn_threshold" not in st.session_state: st.session_state["warn_threshold"] 
 if "forecast_horizon" not in st.session_state: st.session_state["forecast_horizon"] = 24
 if "uploaded_df" not in st.session_state: st.session_state["uploaded_df"] = None
 if "upload_meta" not in st.session_state: st.session_state["upload_meta"] = None
-if "data_source_status" not in st.session_state: st.session_state["data_source_status"] = "Real UKPN Base Stream"
+if "data_source_status" not in st.session_state: st.session_state["data_source_status"] = "Real UKPN Optimise Prime bundled data"
 
 st.markdown("""
 <style>
@@ -176,32 +288,6 @@ if not st.session_state["authenticated"]:
                 st.rerun()
         st.stop()
 
-pipeline = execute_production_ml_pipeline(st.session_state["uploaded_df"])
-model_meta = pipeline["metadata"]
-y_test = pipeline["y_test"]
-xgb_predictions = pipeline["xgb_preds"]
-baseline_predictions = pipeline["baseline_preds"]
-
-current_demand = y_test.iloc[-1]
-horizon_forecast = xgb_predictions[:st.session_state["forecast_horizon"]]
-predicted_peak = np.max(horizon_forecast)
-
-breaches = np.where(horizon_forecast > st.session_state["grid_limit"])[0]
-warnings = np.where(horizon_forecast > st.session_state["warn_threshold"])[0]
-
-if len(breaches) > 0:
-    op_status, status_badge = "CRITICAL RISK", "badge-danger"
-    breach_time = f"+{breaches[0]} Hours"
-    lead_time = f"{max(0, breaches[0] - (warnings[0] if len(warnings) > 0 else 0))} Hours"
-elif len(warnings) > 0:
-    op_status, status_badge = "WARNING PENDING", "badge-warning"
-    breach_time = "No breach predicted"
-    lead_time = "N/A"
-else:
-    op_status, status_badge = "OPTIMAL SAFE", "badge-safe"
-    breach_time = "No breach predicted"
-    lead_time = "No breach predicted"
-
 with st.sidebar:
     st.markdown(f"<h3 style='color: white;'>{st.session_state['org_name']}</h3>", unsafe_allow_html=True)
     selected_depot = st.selectbox(
@@ -213,8 +299,53 @@ with st.sidebar:
         st.session_state["current_depot"] = selected_depot
         st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[selected_depot]
         st.session_state["warn_threshold"] = round(WARNING_ALPHA * DEPOT_CAPACITY_KW[selected_depot], 1)
+        st.session_state["uploaded_df"] = None
+        st.session_state["upload_meta"] = None
     st.markdown("---")
     nav_selection = st.radio("Navigation Menu:", ["🏠 Home / Overview", "🏢 Depots Setup", "📊 Upload Depot Data", "📈 Live Demand Forecast", "🚗 Scenario Analysis", "⚙️ Model Performance", "🚨 System Alerts", "📋 Reports", "📜 Archive History", "⚙️ Settings / Admin"])
+
+try:
+    with st.spinner(f"Preparing {st.session_state['current_depot']} forecast from real Optimise Prime data..."):
+        pipeline = execute_production_ml_pipeline(
+            st.session_state["current_depot"],
+            float(st.session_state["grid_limit"]),
+            int(st.session_state["forecast_horizon"]),
+            st.session_state["uploaded_df"],
+        )
+except Exception as exc:
+    st.error(str(exc))
+    st.info("For Streamlit Cloud, add the combined real file as data/processed/depot_demand.csv, commit, and push it to GitHub.")
+    st.stop()
+
+model_meta = pipeline["metadata"]
+history_series = pipeline["history"]
+y_test = pipeline["y_test"]
+xgb_predictions = pipeline["xgb_preds"]
+baseline_predictions = pipeline["baseline_preds"]
+future_times = pipeline["future_times"]
+horizon_forecast = pipeline["future_forecast"]
+
+current_demand = float(history_series.iloc[-1])
+predicted_peak = float(np.max(horizon_forecast))
+
+breaches = np.where(horizon_forecast >= st.session_state["grid_limit"])[0]
+warnings = np.where(horizon_forecast >= st.session_state["warn_threshold"])[0]
+
+if len(breaches) > 0:
+    op_status, status_badge = "CRITICAL RISK", "badge-danger"
+    breach_minutes = int((breaches[0] + 1) * SAMPLING_MINUTES)
+    breach_time = f"+{breach_minutes / 60:.2f} Hours"
+    first_warning = warnings[0] if len(warnings) > 0 else breaches[0]
+    lead_minutes = max(0, (breaches[0] - first_warning) * SAMPLING_MINUTES)
+    lead_time = f"{lead_minutes / 60:.2f} Hours"
+elif len(warnings) > 0:
+    op_status, status_badge = "WARNING PENDING", "badge-warning"
+    breach_time = "No breach predicted"
+    lead_time = "N/A"
+else:
+    op_status, status_badge = "OPTIMAL SAFE", "badge-safe"
+    breach_time = "No breach predicted"
+    lead_time = "No breach predicted"
 
 if nav_selection == "🏠 Home / Overview":
     st.title(f"🏢 {st.session_state['current_depot']} Operations Dashboard")
@@ -242,10 +373,10 @@ if nav_selection == "🏠 Home / Overview":
     c4.metric("Warning Lead Time", lead_time)
 
     st.subheader("Historical Headroom Footprint Profile")
-    lookback = min(168, len(y_test))
+    lookback = min(192, len(history_series))
     fig_home = go.Figure()
-    fig_home.add_trace(go.Scatter(x=y_test.index[-lookback:], y=y_test.values[-lookback:], name="Actual Demand", line=dict(color="#2563EB")))
-    fig_home.add_shape(type="line", x0=y_test.index[-lookback], x1=y_test.index[-1], y0=st.session_state["grid_limit"], y1=st.session_state["grid_limit"], line=dict(color="#EF4444", dash="dash"))
+    fig_home.add_trace(go.Scatter(x=history_series.index[-lookback:], y=history_series.values[-lookback:], name="Actual Demand", line=dict(color="#2563EB")))
+    fig_home.add_shape(type="line", x0=history_series.index[-lookback], x1=history_series.index[-1], y0=st.session_state["grid_limit"], y1=st.session_state["grid_limit"], line=dict(color="#EF4444", dash="dash"))
     fig_home.update_layout(template="plotly_white", height=300, margin=dict(l=10, r=10, t=10, b=10))
     st.plotly_chart(fig_home, use_container_width=True)
 
@@ -275,7 +406,7 @@ elif nav_selection == "📊 Upload Depot Data":
             st.session_state["upload_meta"] = {
                 "Rows loaded": rows_count, "Timestamp column": t_col, "Demand column": d_col,
                 "Date range": f"{df_raw[t_col].min()} to {df_raw[t_col].max()}",
-                "Missing values": int(df_raw[d_col].isna().sum()), "Sampling interval": "1-Hour Chronological Grid",
+                "Missing values": int(df_raw[d_col].isna().sum()), "Sampling interval": "15-minute chronological grid",
                 "Validation check": "Passed / Success"
                 }
             st.success("🟢 Ingestion validated successfully. Data pipeline features refreshed globally.")
@@ -284,15 +415,15 @@ elif nav_selection == "📊 Upload Depot Data":
             
     if st.session_state["upload_meta"] is not None:
         st.json(st.session_state["upload_meta"])
-        st.button("Synchronize Pipeline Features & Re-train Model", on_click=st.cache_data.clear)
+        st.button("Synchronize Pipeline Features & Re-train Model")
 
 elif nav_selection == "📈 Live Demand Forecast":
     st.title("📈 Live Demand Forecast")
     
     fig = go.Figure()
-    hist_x = y_test.index[-48:]
-    fig.add_trace(go.Scatter(x=hist_x, y=y_test.values[-48:], name="Actual Demand", line=dict(color="#0F172A")))
-    future_x = [hist_x[-1] + timedelta(hours=i) for i in range(1, len(horizon_forecast) + 1)]
+    hist_x = history_series.index[-192:]
+    fig.add_trace(go.Scatter(x=hist_x, y=history_series.values[-192:], name="Actual Demand", line=dict(color="#0F172A")))
+    future_x = future_times
     fig.add_trace(go.Scatter(x=future_x, y=horizon_forecast, name="XGBoost Forecast", line=dict(color="#10B981", dash="dash")))
     
     fig.add_shape(type="line", x0=hist_x[0], y0=st.session_state["grid_limit"], x1=future_x[-1], y1=st.session_state["grid_limit"], line=dict(color="#EF4444", width=2))
@@ -313,7 +444,7 @@ elif nav_selection == "🚗 Scenario Analysis":
     scenario_y = horizon_forecast * (1.0 + (growth / 100.0))
     
     fig_sc = go.Figure()
-    timeline = [y_test.index[-1] + timedelta(hours=i) for i in range(1, len(horizon_forecast) + 1)]
+    timeline = future_times
     fig_sc.add_trace(go.Scatter(x=timeline, y=horizon_forecast, name="XGBoost Forecast", line=dict(color="#64748B", dash="dot")))
     fig_sc.add_trace(go.Scatter(x=timeline, y=scenario_y, name="Scenario-Adjusted Demand Curve", line=dict(color="#2563EB")))
     fig_sc.update_layout(template="plotly_white", height=400)
@@ -331,7 +462,7 @@ elif nav_selection == "⚙️ Model Performance":
     tbl = {
         "Analytics Architecture Signature": ["Mean Absolute Error (MAE)", "Root Mean Squared Error (RMSE)", "Breach Recall Capture Rate (TPR)", "False Alarm Frequency Rate (FAR)"],
         "Previous-Day Same-Hour Baseline": [f"{model_meta['metrics_baseline']['mae']} kW", f"{model_meta['metrics_baseline']['rmse']} kW", model_meta['metrics_baseline']['recall'], model_meta['metrics_baseline']['far']],
-        "XGBoost Global Demand Forecast Model": [f"{model_meta['metrics_xgb']['mae']} kW", f"{model_meta['metrics_xgb']['rmse']} kW", model_meta['metrics_xgb']['recall'], model_meta['metrics_xgb']['far']]
+        "XGBoost 340-Tree Depot Forecast Model": [f"{model_meta['metrics_xgb']['mae']} kW", f"{model_meta['metrics_xgb']['rmse']} kW", model_meta['metrics_xgb']['recall'], model_meta['metrics_xgb']['far']]
     }
     st.table(pd.DataFrame(tbl).set_index("Analytics Architecture Signature"))
 
