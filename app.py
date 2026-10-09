@@ -582,6 +582,17 @@ def evaluate_existing_model_on_uploaded_data(
         "baseline_metrics": baseline_metrics,
     }
 
+
+def regression_metrics_for_comparison(y_true, y_pred) -> dict:
+    """Metrics used for before-vs-after retraining comparison on identical rows."""
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    return {
+        "mae": float(mean_absolute_error(y_true, y_pred)),
+        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        "r2": float(r2_score(y_true, y_pred)),
+    }
+
 # ===================================================================== #
 # SESSION STATE / UI                                                     #
 # ===================================================================== #
@@ -1577,6 +1588,21 @@ elif nav_selection == "📊 Upload Depot Data":
                         "15% untouched held-out test**"
                     )
 
+                    # Preserve the existing model's unseen-data predictions before
+                    # retraining. These will later be aligned to the NEW model's exact
+                    # held-out test timestamps for an apples-to-apples comparison.
+                    pre_retrain_eval = evaluate_existing_model_on_uploaded_data(
+                        pipeline["model"],
+                        pipeline["feature_cols"],
+                        raw_uploaded_df,
+                        float(uploaded_capacity),
+                    )
+
+                    pre_existing_series = pd.Series(
+                        np.asarray(pre_retrain_eval["predictions"], dtype=float),
+                        index=pd.to_datetime(pre_retrain_eval["timestamps"]),
+                    )
+
                     # This button means retrain, so clear the cached fitted pipeline
                     # to guarantee a new fit rather than returning a cached result.
                     execute_production_ml_pipeline.clear()
@@ -1652,6 +1678,33 @@ elif nav_selection == "📊 Upload Depot Data":
                         f"Held-out test: {completed_meta.get('test_period', 'N/A')}"
                     )
 
+                    retrained_y_test = retrained_pipeline["y_test"]
+                    retrained_test_index = pd.to_datetime(retrained_y_test.index)
+                    retrained_actual = np.asarray(retrained_y_test, dtype=float)
+                    retrained_pred = np.asarray(
+                        retrained_pipeline["xgb_preds"],
+                        dtype=float,
+                    )
+
+                    existing_on_same_test = (
+                        pre_existing_series.reindex(retrained_test_index).to_numpy(dtype=float)
+                    )
+
+                    valid_compare = np.isfinite(existing_on_same_test)
+                    compare_index = retrained_test_index[valid_compare]
+                    compare_actual = retrained_actual[valid_compare]
+                    compare_existing = existing_on_same_test[valid_compare]
+                    compare_retrained = retrained_pred[valid_compare]
+
+                    existing_same_metrics = regression_metrics_for_comparison(
+                        compare_actual,
+                        compare_existing,
+                    )
+                    retrained_same_metrics = regression_metrics_for_comparison(
+                        compare_actual,
+                        compare_retrained,
+                    )
+
                     st.session_state["retraining_completion_summary"] = {
                         "upload_id": upload_id,
                         "depot": clean_name,
@@ -1662,6 +1715,12 @@ elif nav_selection == "📊 Upload Depot Data":
                         "train_period": completed_meta.get("train_period", "N/A"),
                         "validation_period": completed_meta.get("validation_period", "N/A"),
                         "test_period": completed_meta.get("test_period", "N/A"),
+                        "compare_timestamps": compare_index.to_numpy(),
+                        "compare_actual": compare_actual,
+                        "compare_existing": compare_existing,
+                        "compare_retrained": compare_retrained,
+                        "existing_same_metrics": existing_same_metrics,
+                        "retrained_same_metrics": retrained_same_metrics,
                     }
 
                     # Rerun so the sidebar is rebuilt immediately with the newly
@@ -1705,6 +1764,189 @@ elif nav_selection == "📊 Upload Depot Data":
                     "longer valid as unseen data. Upload later/newer telemetry for the "
                     "next genuine generalisation test."
                 )
+
+                if (
+                    completion.get("compare_timestamps") is not None
+                    and completion.get("existing_same_metrics") is not None
+                    and completion.get("retrained_same_metrics") is not None
+                ):
+                    st.markdown("#### Before vs After Retraining")
+                    st.caption(
+                        "The plots below compare the existing model and the retrained "
+                        "model on the exact same untouched held-out test rows. This makes "
+                        "the improvement comparison directly comparable."
+                    )
+
+                    comp_ts = pd.to_datetime(completion["compare_timestamps"])
+                    comp_actual = np.asarray(completion["compare_actual"], dtype=float)
+                    comp_existing = np.asarray(completion["compare_existing"], dtype=float)
+                    comp_retrained = np.asarray(completion["compare_retrained"], dtype=float)
+
+                    before_m = completion["existing_same_metrics"]
+                    after_m = completion["retrained_same_metrics"]
+
+                    # Plot 1: exact same held-out time series before vs after retraining.
+                    fig_retrain_ts = go.Figure()
+                    fig_retrain_ts.add_trace(
+                        go.Scatter(
+                            x=comp_ts,
+                            y=comp_actual,
+                            mode="lines",
+                            name="Actual Demand",
+                            line=dict(width=1.6),
+                        )
+                    )
+                    fig_retrain_ts.add_trace(
+                        go.Scatter(
+                            x=comp_ts,
+                            y=comp_existing,
+                            mode="lines",
+                            name="Existing Model Before Retraining",
+                            line=dict(width=1.1, dash="dot"),
+                        )
+                    )
+                    fig_retrain_ts.add_trace(
+                        go.Scatter(
+                            x=comp_ts,
+                            y=comp_retrained,
+                            mode="lines",
+                            name="Retrained XGBoost",
+                            line=dict(width=1.4),
+                        )
+                    )
+                    fig_retrain_ts.update_layout(
+                        title="Held-Out Demand: Before vs After Retraining",
+                        xaxis_title="Timestamp",
+                        yaxis_title="Demand (kW)",
+                        hovermode="x unified",
+                        height=440,
+                        margin=dict(l=55, r=25, t=85, b=55),
+                        legend=dict(
+                            orientation="h",
+                            y=1.10,
+                            x=0,
+                            yanchor="bottom",
+                        ),
+                    )
+                    st.plotly_chart(fig_retrain_ts, use_container_width=True)
+
+                    # Plot 2: MAE and RMSE before vs after on identical held-out rows.
+                    metric_compare = pd.DataFrame(
+                        {
+                            "Metric": ["MAE", "RMSE"],
+                            "Before Retraining": [
+                                before_m["mae"],
+                                before_m["rmse"],
+                            ],
+                            "After Retraining": [
+                                after_m["mae"],
+                                after_m["rmse"],
+                            ],
+                        }
+                    )
+                    fig_metric_compare = go.Figure()
+                    fig_metric_compare.add_trace(
+                        go.Bar(
+                            x=metric_compare["Metric"],
+                            y=metric_compare["Before Retraining"],
+                            name="Before Retraining",
+                            text=[
+                                f"{v:.2f} kW"
+                                for v in metric_compare["Before Retraining"]
+                            ],
+                            textposition="outside",
+                        )
+                    )
+                    fig_metric_compare.add_trace(
+                        go.Bar(
+                            x=metric_compare["Metric"],
+                            y=metric_compare["After Retraining"],
+                            name="After Retraining",
+                            text=[
+                                f"{v:.2f} kW"
+                                for v in metric_compare["After Retraining"]
+                            ],
+                            textposition="outside",
+                        )
+                    )
+                    fig_metric_compare.update_layout(
+                        title="Error Metrics Before vs After Retraining",
+                        xaxis_title="Metric",
+                        yaxis_title="Error (kW)",
+                        barmode="group",
+                        height=390,
+                        margin=dict(l=55, r=25, t=85, b=55),
+                        legend=dict(
+                            orientation="h",
+                            y=1.10,
+                            x=0,
+                            yanchor="bottom",
+                        ),
+                    )
+                    st.plotly_chart(
+                        fig_metric_compare,
+                        use_container_width=True,
+                    )
+
+                    # Plot 3: residual distributions on identical held-out rows.
+                    before_resid = comp_actual - comp_existing
+                    after_resid = comp_actual - comp_retrained
+
+                    fig_resid_compare = go.Figure()
+                    fig_resid_compare.add_trace(
+                        go.Histogram(
+                            x=before_resid,
+                            nbinsx=45,
+                            name="Before Retraining",
+                            opacity=0.55,
+                        )
+                    )
+                    fig_resid_compare.add_trace(
+                        go.Histogram(
+                            x=after_resid,
+                            nbinsx=45,
+                            name="After Retraining",
+                            opacity=0.55,
+                        )
+                    )
+                    fig_resid_compare.add_vline(
+                        x=0,
+                        line_dash="dash",
+                    )
+                    fig_resid_compare.update_layout(
+                        title="Held-Out Residual Distribution Before vs After Retraining",
+                        xaxis_title="Residual (Actual − Predicted) kW",
+                        yaxis_title="Frequency",
+                        barmode="overlay",
+                        height=410,
+                        margin=dict(l=55, r=25, t=85, b=55),
+                        legend=dict(
+                            orientation="h",
+                            y=1.10,
+                            x=0,
+                            yanchor="bottom",
+                        ),
+                    )
+                    st.plotly_chart(
+                        fig_resid_compare,
+                        use_container_width=True,
+                    )
+
+                    mae_change = before_m["mae"] - after_m["mae"]
+                    rmse_change = before_m["rmse"] - after_m["rmse"]
+
+                    if mae_change > 0 and rmse_change > 0:
+                        st.success(
+                            f"Retraining improved performance on the identical held-out "
+                            f"rows: MAE reduced by **{mae_change:.2f} kW** and RMSE "
+                            f"reduced by **{rmse_change:.2f} kW**."
+                        )
+                    else:
+                        st.warning(
+                            "Retraining did not improve both MAE and RMSE on the identical "
+                            "held-out rows. Review the plots and metrics before adopting "
+                            "the retrained model operationally."
+                        )
 
         except Exception as exc:
             st.error(f"Upload validation failed: {exc}")
