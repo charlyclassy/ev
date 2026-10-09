@@ -425,12 +425,12 @@ if len(breaches) > 0:
     lead_minutes = max(0, (breaches[0] - first_warning) * SAMPLING_MINUTES)
     lead_time = f"{lead_minutes / 60:.2f} Hours"
 elif len(warnings) > 0:
-    op_status, status_badge = "WARNING PENDING", "badge-warning"
-    breach_time = "No breach predicted"
+    op_status, status_badge = "WARNING THRESHOLD FORECAST", "badge-warning"
+    breach_time = "No capacity breach predicted"
     lead_time = "N/A"
 else:
     op_status, status_badge = "OPTIMAL SAFE", "badge-safe"
-    breach_time = "No breach predicted"
+    breach_time = "No capacity breach predicted"
     lead_time = "No breach predicted"
 
 if nav_selection == "🏠 Home / Overview":
@@ -441,7 +441,7 @@ if nav_selection == "🏠 Home / Overview":
     <div style='background-color: #FFFFFF; border: 1px solid #E2E8F0; padding: 16px; border-radius: 8px; margin-bottom: 20px;'>
         <table style='width:100%; font-size: 14px;'>
             <tr style='font-size: 11px; color: #64748B; text-transform: uppercase;'>
-                <td>Corporate Workspace</td><td>Operational Status</td><td>Expected Breach Time</td>
+                <td>Corporate Workspace</td><td>Operational Status</td><td>Expected Capacity Breach</td>
             </tr>
             <tr>
                 <td style='font-weight:700;'>{st.session_state['org_name']}</td>
@@ -531,7 +531,7 @@ if nav_selection == "🏠 Home / Overview":
     planning_threshold = float(st.session_state["grid_limit"])
     warning_threshold = float(st.session_state["warn_threshold"])
 
-    def build_home_history_chart(series: pd.Series, xaxis_title: str, peak_label: str = "Historical Peak") -> go.Figure:
+    def build_home_history_chart(series: pd.Series, xaxis_title: str, peak_label: str = "Historical Peak", show_peak: bool = True) -> go.Figure:
         series = series.dropna().sort_index()
         hist_x = series.index
         hist_y = series.to_numpy(dtype=float)
@@ -569,16 +569,17 @@ if nav_selection == "🏠 Home / Overview":
                 hovertemplate=f"Planning capacity threshold: {planning_threshold:.1f} kW<extra></extra>",
             )
         )
-        fig_home.add_trace(
-            go.Scatter(
-                x=[peak_time],
-                y=[peak_value],
-                name=peak_label,
-                mode="markers",
-                marker=dict(size=8, symbol="diamond", color="#7C3AED"),
-                hovertemplate="%{x|%d %b %Y %H:%M}<br>Historical peak: %{y:.2f} kW<extra></extra>",
+        if show_peak:
+            fig_home.add_trace(
+                go.Scatter(
+                    x=[peak_time],
+                    y=[peak_value],
+                    name=peak_label,
+                    mode="markers",
+                    marker=dict(size=8, symbol="diamond", color="#7C3AED"),
+                    hovertemplate="%{x|%d %b %Y %H:%M}<br>Held-out peak: %{y:.2f} kW<extra></extra>",
+                )
             )
-        )
         fig_home.update_layout(
             template="plotly_white",
             height=430,
@@ -617,15 +618,21 @@ if nav_selection == "🏠 Home / Overview":
     st.markdown(
         f"**Recent operational view — {recent_start_label} to {recent_end_label}**"
     )
+    recent_max_value = float(recent_series.max())
+    recent_max_time = recent_series.idxmax()
+
     st.caption(
         f"Latest {recent_lookback} fifteen-minute intervals for "
-        f"{st.session_state['current_depot']}."
+        f"{st.session_state['current_depot']}. "
+        f"Maximum within this recent window: {recent_max_value:.2f} kW "
+        f"on {recent_max_time:%d %b %Y at %H:%M}. "
+        f"The diamond peak marker is reserved for the full held-out test view below."
     )
     st.plotly_chart(
         build_home_history_chart(
             recent_series,
             xaxis_title="Time",
-            peak_label="Recent-window peak",
+            show_peak=False,
         ),
         use_container_width=True,
     )
@@ -638,11 +645,19 @@ if nav_selection == "🏠 Home / Overview":
         f"({model_meta['test_observations']:,} observations). "
         f"This period includes the recent operational window shown above."
     )
+    heldout_peak_value = float(full_test_series.max())
+    heldout_peak_time = full_test_series.idxmax()
+
+    st.caption(
+        f"Held-out-period peak: {heldout_peak_value:.2f} kW "
+        f"on {heldout_peak_time:%d %b %Y at %H:%M}."
+    )
     st.plotly_chart(
         build_home_history_chart(
             full_test_series,
             xaxis_title="Date",
             peak_label="Held-out-period peak",
+            show_peak=True,
         ),
         use_container_width=True,
     )
