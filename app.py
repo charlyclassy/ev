@@ -664,12 +664,42 @@ if nav_selection == "🏠 Home / Overview":
 
 elif nav_selection == "🏢 Depots Setup":
     st.title("🏢 Depot Configuration Registry")
+    st.caption(
+        "Configure planning thresholds for the currently selected depot. "
+        "The organisation shown below is the company that owns and operates this application."
+    )
+
     with st.container(border=True):
-        st.session_state["org_name"] = st.text_input("Organization Title", value=st.session_state["org_name"])
-        st.session_state["grid_limit"] = st.number_input("Planning Capacity Threshold (kW)", value=float(st.session_state["grid_limit"]), min_value=0.0, step=1.0)
-        st.session_state["warn_threshold"] = st.number_input("Warning Threshold (kW)", value=float(st.session_state["warn_threshold"]), min_value=0.0, step=1.0)
+        st.text_input(
+            "Selected Depot",
+            value=st.session_state["current_depot"],
+            disabled=True,
+        )
+
+        st.text_input(
+            "Organisation",
+            value=st.session_state["org_name"],
+            disabled=True,
+        )
+
+        st.session_state["grid_limit"] = st.number_input(
+            "Planning Capacity Threshold (kW)",
+            value=float(st.session_state["grid_limit"]),
+            min_value=0.0,
+            step=1.0,
+        )
+
+        st.session_state["warn_threshold"] = st.number_input(
+            "Warning Threshold (kW)",
+            value=float(st.session_state["warn_threshold"]),
+            min_value=0.0,
+            step=1.0,
+        )
+
         if st.button("Save Depot Configuration"):
-            st.toast("Substation configuration targets saved successfully.")
+            st.toast(
+                f"{st.session_state['current_depot']} configuration saved successfully."
+            )
 
 elif nav_selection == "📊 Upload Depot Data":
     st.title("📊 Upload Depot Data")
