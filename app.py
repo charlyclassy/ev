@@ -536,11 +536,81 @@ elif nav_selection == "⚙️ Model Performance":
         f"**{len(y_test):,} observations**"
     )
     
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Mean Absolute Error (MAE)", f"{model_meta['metrics_xgb']['mae']} kW")
-    m2.metric("Root Mean Squared Error (RMSE)", f"{model_meta['metrics_xgb']['rmse']} kW")
-    m3.metric("Breach Recall", model_meta['metrics_xgb']['recall'])
-    m4.metric("False Alarm Ratio", model_meta['metrics_xgb']['far'])
+    # Custom metric cards are used instead of st.metric so the full labels
+    # remain visible without Streamlit truncating them with ellipses.
+    mae_value = f"{model_meta['metrics_xgb']['mae']} kW"
+    rmse_value = f"{model_meta['metrics_xgb']['rmse']} kW"
+    recall_value = str(model_meta['metrics_xgb']['recall'])
+    far_value = str(model_meta['metrics_xgb']['far'])
+
+    st.markdown(
+        f"""
+        <style>
+        .perf-card-grid {{
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 16px;
+            margin: 14px 0 22px 0;
+        }}
+        .perf-card {{
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 20px 20px 18px 20px;
+            min-height: 112px;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        }}
+        .perf-card-label {{
+            color: #64748B;
+            font-size: 0.88rem;
+            font-weight: 600;
+            line-height: 1.25;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            white-space: normal;
+            overflow: visible;
+            text-overflow: clip;
+            margin-bottom: 8px;
+        }}
+        .perf-card-value {{
+            color: #0F172A;
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.05;
+        }}
+        @media (max-width: 900px) {{
+            .perf-card-grid {{
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }}
+        }}
+        @media (max-width: 560px) {{
+            .perf-card-grid {{
+                grid-template-columns: 1fr;
+            }}
+        }}
+        </style>
+
+        <div class="perf-card-grid">
+            <div class="perf-card">
+                <div class="perf-card-label">Mean Absolute Error</div>
+                <div class="perf-card-value">{mae_value}</div>
+            </div>
+            <div class="perf-card">
+                <div class="perf-card-label">Root Mean Squared Error</div>
+                <div class="perf-card-value">{rmse_value}</div>
+            </div>
+            <div class="perf-card">
+                <div class="perf-card-label">Breach Recall</div>
+                <div class="perf-card-value">{recall_value}</div>
+            </div>
+            <div class="perf-card">
+                <div class="perf-card-label">False Alarm Ratio</div>
+                <div class="perf-card-value">{far_value}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     
     tbl = {
         "Analytics Architecture Signature": ["Mean Absolute Error (MAE)", "Root Mean Squared Error (RMSE)", "Breach Recall Capture Rate (TPR)", "False Alarm Ratio (FP / (TP + FP))"],
@@ -564,9 +634,21 @@ elif nav_selection == "⚙️ Model Performance":
         else 0.0
     )
 
-    b1, b2 = st.columns(2)
-    b1.metric("MAE improvement vs baseline", f"{mae_improvement:.1f}%")
-    b2.metric("RMSE improvement vs baseline", f"{rmse_improvement:.1f}%")
+    st.markdown(
+        f"""
+        <div class="perf-card-grid" style="grid-template-columns: repeat(2, minmax(0, 1fr));">
+            <div class="perf-card">
+                <div class="perf-card-label">MAE Reduction vs Baseline</div>
+                <div class="perf-card-value">{mae_improvement:.1f}%</div>
+            </div>
+            <div class="perf-card">
+                <div class="perf-card-label">RMSE Reduction vs Baseline</div>
+                <div class="perf-card-value">{rmse_improvement:.1f}%</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.info(
         "All error metrics, breach metrics, residuals, scatter points and the "
