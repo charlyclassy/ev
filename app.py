@@ -1363,7 +1363,12 @@ elif nav_selection == "📊 Upload Depot Data":
                 st.plotly_chart(fig_eval_ts, use_container_width=True)
 
                 # Plot 2: actual vs predicted scatter, with y=x ideal line.
-                scatter_max = float(max(np.max(eval_actual), np.max(eval_pred), 1.0))
+                # Use identical zero-based axes so the visual comparison is not distorted.
+                scatter_data_max = float(
+                    max(np.max(eval_actual), np.max(eval_pred), 1.0)
+                )
+                scatter_max = scatter_data_max * 1.05
+
                 fig_eval_scatter = go.Figure()
                 fig_eval_scatter.add_trace(
                     go.Scatter(
@@ -1388,16 +1393,32 @@ elif nav_selection == "📊 Upload Depot Data":
                     xaxis_title="Actual Demand (kW)",
                     yaxis_title="Predicted Demand (kW)",
                     height=430,
-                    margin=dict(l=40, r=20, t=65, b=40),
-                    xaxis=dict(range=[0, scatter_max]),
-                    yaxis=dict(range=[0, scatter_max], scaleanchor="x", scaleratio=1),
-                    legend=dict(orientation="h", y=1.12, x=0),
+                    margin=dict(l=55, r=25, t=75, b=55),
+                    legend=dict(orientation="h", y=1.14, x=0),
+                )
+                fig_eval_scatter.update_xaxes(
+                    range=[0, scatter_max],
+                    constrain="domain",
+                    zeroline=False,
+                )
+                fig_eval_scatter.update_yaxes(
+                    range=[0, scatter_max],
+                    scaleanchor="x",
+                    scaleratio=1,
+                    constrain="domain",
+                    zeroline=False,
                 )
                 st.plotly_chart(fig_eval_scatter, use_container_width=True)
 
                 # Plot 3: residual distribution to show error bias/spread.
+                # Reference lines are placed in the legend to avoid overlapping labels.
                 mean_residual = float(np.mean(eval_residuals))
                 median_residual = float(np.median(eval_residuals))
+                residual_ymax = max(
+                    1,
+                    int(np.histogram(eval_residuals, bins=60)[0].max() * 1.08),
+                )
+
                 fig_eval_resid = go.Figure()
                 fig_eval_resid.add_trace(
                     go.Histogram(
@@ -1407,31 +1428,37 @@ elif nav_selection == "📊 Upload Depot Data":
                         opacity=0.80,
                     )
                 )
-                fig_eval_resid.add_vline(
-                    x=0,
-                    line_dash="dash",
-                    annotation_text="Zero error",
-                    annotation_position="top",
-                )
-                fig_eval_resid.add_vline(
-                    x=mean_residual,
-                    line_dash="dot",
-                    annotation_text=f"Mean {mean_residual:.2f} kW",
-                    annotation_position="top left",
-                )
-                fig_eval_resid.add_vline(
-                    x=median_residual,
-                    line_dash="dot",
-                    annotation_text=f"Median {median_residual:.2f} kW",
-                    annotation_position="top right",
-                )
+
+                for x_value, label, dash_style in [
+                    (0.0, "Zero error", "dash"),
+                    (mean_residual, f"Mean: {mean_residual:.2f} kW", "dot"),
+                    (median_residual, f"Median: {median_residual:.2f} kW", "dashdot"),
+                ]:
+                    fig_eval_resid.add_trace(
+                        go.Scatter(
+                            x=[x_value, x_value],
+                            y=[0, residual_ymax],
+                            mode="lines",
+                            name=label,
+                            line=dict(dash=dash_style, width=2),
+                            hoverinfo="skip",
+                        )
+                    )
+
                 fig_eval_resid.update_layout(
                     title="Unseen-Data Residual Distribution (Actual − Predicted)",
                     xaxis_title="Residual (kW)",
                     yaxis_title="Frequency",
-                    height=400,
-                    margin=dict(l=40, r=20, t=65, b=40),
+                    height=420,
+                    margin=dict(l=55, r=25, t=95, b=55),
                     bargap=0.03,
+                    legend=dict(
+                        orientation="h",
+                        y=1.16,
+                        x=0,
+                        yanchor="bottom",
+                        xanchor="left",
+                    ),
                 )
                 st.plotly_chart(fig_eval_resid, use_container_width=True)
 
