@@ -577,7 +577,7 @@ if nav_selection == "🏠 Home / Overview":
                     name=peak_label,
                     mode="markers",
                     marker=dict(size=8, symbol="diamond", color="#7C3AED"),
-                    hovertemplate="%{x|%d %b %Y %H:%M}<br>Held-out peak: %{y:.2f} kW<extra></extra>",
+                    hovertemplate="%{x|%d %b %Y %H:%M}<br>Peak demand: %{y:.2f} kW<extra></extra>",
                 )
             )
         fig_home.update_layout(
@@ -624,15 +624,15 @@ if nav_selection == "🏠 Home / Overview":
     st.caption(
         f"Latest {recent_lookback} fifteen-minute intervals for "
         f"{st.session_state['current_depot']}. "
-        f"Maximum within this recent window: {recent_max_value:.2f} kW "
-        f"on {recent_max_time:%d %b %Y at %H:%M}. "
-        f"The diamond peak marker is reserved for the full held-out test view below."
+        f"Recent-window peak: {recent_max_value:.2f} kW "
+        f"on {recent_max_time:%d %b %Y at %H:%M}."
     )
     st.plotly_chart(
         build_home_history_chart(
             recent_series,
             xaxis_title="Time",
-            show_peak=False,
+            peak_label="Recent-window peak",
+            show_peak=True,
         ),
         use_container_width=True,
     )
