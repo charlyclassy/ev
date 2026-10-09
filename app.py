@@ -1389,23 +1389,29 @@ elif nav_selection == "📊 Upload Depot Data":
                     )
                 )
                 fig_eval_scatter.update_layout(
-                    title="Actual vs Predicted Demand on Unseen Data",
+                    title=dict(
+                        text="Actual vs Predicted Demand on Unseen Data",
+                        x=0.0,
+                        xanchor="left",
+                    ),
                     xaxis_title="Actual Demand (kW)",
                     yaxis_title="Predicted Demand (kW)",
-                    height=430,
-                    margin=dict(l=55, r=25, t=75, b=55),
-                    legend=dict(orientation="h", y=1.14, x=0),
+                    height=460,
+                    margin=dict(l=65, r=30, t=95, b=65),
+                    legend=dict(
+                        orientation="h",
+                        y=1.08,
+                        x=0,
+                        yanchor="bottom",
+                        xanchor="left",
+                    ),
                 )
                 fig_eval_scatter.update_xaxes(
                     range=[0, scatter_max],
-                    constrain="domain",
                     zeroline=False,
                 )
                 fig_eval_scatter.update_yaxes(
                     range=[0, scatter_max],
-                    scaleanchor="x",
-                    scaleratio=1,
-                    constrain="domain",
                     zeroline=False,
                 )
                 st.plotly_chart(fig_eval_scatter, use_container_width=True)
@@ -1426,6 +1432,7 @@ elif nav_selection == "📊 Upload Depot Data":
                         nbinsx=60,
                         name="Residuals",
                         opacity=0.80,
+                        showlegend=False,
                     )
                 )
 
@@ -1446,15 +1453,19 @@ elif nav_selection == "📊 Upload Depot Data":
                     )
 
                 fig_eval_resid.update_layout(
-                    title="Unseen-Data Residual Distribution (Actual − Predicted)",
+                    title=dict(
+                        text="Unseen-Data Residual Distribution (Actual − Predicted)",
+                        x=0.0,
+                        xanchor="left",
+                    ),
                     xaxis_title="Residual (kW)",
                     yaxis_title="Frequency",
-                    height=420,
-                    margin=dict(l=55, r=25, t=95, b=55),
+                    height=440,
+                    margin=dict(l=65, r=30, t=120, b=65),
                     bargap=0.03,
                     legend=dict(
                         orientation="h",
-                        y=1.16,
+                        y=1.04,
                         x=0,
                         yanchor="bottom",
                         xanchor="left",
