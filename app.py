@@ -695,8 +695,8 @@ elif nav_selection == "⚙️ Model Performance":
     )
     fig_scat_full.add_trace(
         go.Scatter(
-            x=[scatter_min, scatter_max],
-            y=[scatter_min, scatter_max],
+            x=[0, scatter_max],
+            y=[0, scatter_max],
             mode="lines",
             line=dict(color="#64748B", width=2, dash="dash"),
             name="Ideal prediction (y = x)",
@@ -718,16 +718,24 @@ elif nav_selection == "⚙️ Model Performance":
         margin=dict(l=20, r=20, t=90, b=35),
     )
     fig_scat_full.update_xaxes(
-        range=[scatter_min, scatter_max],
+        range=[0, scatter_max],
+        autorange=False,
+        constrain="domain",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
+        zeroline=True,
+        zerolinecolor="rgba(100,116,139,0.55)",
     )
     fig_scat_full.update_yaxes(
-        range=[scatter_min, scatter_max],
+        range=[0, scatter_max],
+        autorange=False,
         scaleanchor="x",
         scaleratio=1,
+        constrain="domain",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
+        zeroline=True,
+        zerolinecolor="rgba(100,116,139,0.55)",
     )
     st.plotly_chart(fig_scat_full, use_container_width=True)
 
@@ -766,7 +774,7 @@ elif nav_selection == "⚙️ Model Performance":
     fig_scat_zoom.update_layout(
         title={
             "text": "Actual vs Predicted Scatter — Zoomed Central View"
-                    f"<br><sup>Central 95% demand range | R² = {r2:.3f}</sup>",
+                    f"<br><sup>Central 95% of demand range | R² = {r2:.3f}</sup>",
             "x": 0.01,
         },
         xaxis_title="Actual Demand (kW)",
@@ -778,15 +786,23 @@ elif nav_selection == "⚙️ Model Performance":
     )
     fig_scat_zoom.update_xaxes(
         range=[0, central_upper],
+        autorange=False,
+        constrain="domain",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
+        zeroline=True,
+        zerolinecolor="rgba(100,116,139,0.55)",
     )
     fig_scat_zoom.update_yaxes(
         range=[0, central_upper],
+        autorange=False,
         scaleanchor="x",
         scaleratio=1,
+        constrain="domain",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
+        zeroline=True,
+        zerolinecolor="rgba(100,116,139,0.55)",
     )
     st.plotly_chart(fig_scat_zoom, use_container_width=True)
 
