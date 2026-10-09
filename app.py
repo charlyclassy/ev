@@ -970,12 +970,86 @@ elif nav_selection == "📋 Reports":
 
 elif nav_selection == "📜 Archive History":
     st.title("📜 Archive History")
+    st.caption(
+        "Held-out test history for the selected depot. "
+        "Residual = Actual Observed − Forecast."
+    )
+
     history_table = pd.DataFrame({
-        "Forecast kW": np.round(xgb_predictions, 2),
-        "Actual Observed kW": np.round(y_test.values, 2),
-        "Error Margin kW": np.round(pipeline["errors"], 2)
-    }, index=y_test.index)
-    st.dataframe(history_table.head(100), use_container_width=True)
+        "Timestamp": y_test.index,
+        "Forecast kW": xgb_predictions,
+        "Actual Observed kW": y_test.values,
+        "Residual (Actual - Predicted) kW": pipeline["errors"],
+    })
+
+    # Default to the most recent observations so the table does not open on a
+    # long run of overnight zero-demand intervals.
+    sort_order = st.selectbox(
+        "Display order",
+        ["Most recent first", "Oldest first"],
+        index=0,
+    )
+
+    show_non_zero_only = st.checkbox(
+        "Show non-zero demand only",
+        value=True,
+        help=(
+            "Filters out rows where both actual and forecast demand are effectively zero. "
+            "Untick this box to inspect the complete held-out history."
+        ),
+    )
+
+    display_table = history_table.copy()
+
+    if show_non_zero_only:
+        display_table = display_table[
+            (display_table["Actual Observed kW"].abs() > 0.01)
+            | (display_table["Forecast kW"].abs() > 0.01)
+        ]
+
+    ascending = sort_order == "Oldest first"
+    display_table = display_table.sort_values("Timestamp", ascending=ascending)
+
+    total_rows = len(history_table)
+    shown_rows = len(display_table)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Held-out observations", f"{total_rows:,}")
+    c2.metric("Rows matching filter", f"{shown_rows:,}")
+    c3.metric(
+        "Non-zero share",
+        f"{(shown_rows / total_rows * 100):.1f}%" if show_non_zero_only and total_rows else "100.0%",
+    )
+
+    st.dataframe(
+        display_table,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Timestamp": st.column_config.DatetimeColumn(
+                "Timestamp",
+                format="DD MMM YYYY, HH:mm",
+            ),
+            "Forecast kW": st.column_config.NumberColumn(
+                "Forecast kW",
+                format="%.2f",
+            ),
+            "Actual Observed kW": st.column_config.NumberColumn(
+                "Actual Observed kW",
+                format="%.2f",
+            ),
+            "Residual (Actual - Predicted) kW": st.column_config.NumberColumn(
+                "Residual (Actual - Predicted) kW",
+                format="%.2f",
+            ),
+        },
+        height=520,
+    )
+
+    st.caption(
+        "Tip: untick **Show non-zero demand only** to inspect every held-out "
+        "15-minute interval, including genuine zero-demand periods."
+    )
 
 elif nav_selection == "⚙️ Settings / Admin":
     st.title("⚙️ Global Parameter Controls & Settings")
