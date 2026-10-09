@@ -492,7 +492,20 @@ elif nav_selection == "📊 Upload Depot Data":
         st.button("Synchronize Pipeline Features & Re-train Model")
 
 elif nav_selection == "📈 Live Demand Forecast":
-    st.title("📈 Historical Demand & 24-Hour Forecast")
+    st.markdown(
+        """
+        <h1 style="
+            font-size: 2.65rem;
+            line-height: 1.08;
+            margin-bottom: 0.35rem;
+            white-space: nowrap;
+            color: #0F172A;
+        ">
+            📈 Historical Demand & 24-Hour Forecast
+        </h1>
+        """,
+        unsafe_allow_html=True,
+    )
     st.caption(
         "Historical observed demand is shown up to the forecast start. "
         "The dashed green line is the 24-hour XGBoost forecast based on the "
