@@ -1062,7 +1062,114 @@ elif nav_selection == "📜 Archive History":
 
 elif nav_selection == "⚙️ Settings / Admin":
     st.title("⚙️ Global Parameter Controls & Settings")
-    st.subheader("Model Training Summary (Grounded Pipeline Configuration)")
-    st.json(model_meta)
+    st.caption(
+        "Model configuration and held-out evaluation summary for the selected depot."
+    )
+
+    st.subheader("Model Training Summary")
+
+    synthetic_used = bool(model_meta.get("synthetic_data_used", False))
+    forecast_horizon = model_meta.get("forecast_horizon_hours", st.session_state["forecast_horizon"])
+    model_type_display = model_meta.get("model_type", "XGBoost Regressor")
+    train_period = model_meta.get("train_period", "Not available")
+    validation_period = model_meta.get("validation_period", "Not available")
+    test_period = model_meta.get("test_period", "Not available")
+    test_observations = model_meta.get("test_observations", len(y_test))
+
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Model", model_type_display)
+    s2.metric("Forecast horizon", f"{forecast_horizon} hours")
+    s3.metric("Held-out observations", f"{int(test_observations):,}")
+    s4.metric("Synthetic data used", "No" if not synthetic_used else "Yes")
+
+    st.markdown("#### Data split")
+    split_df = pd.DataFrame({
+        "Stage": ["Training", "Validation", "Held-out test"],
+        "Period": [train_period, validation_period, test_period],
+        "Purpose": [
+            "Model fitting",
+            "Model selection / tuning",
+            "Final unbiased evaluation",
+        ],
+    })
+    st.dataframe(split_df, use_container_width=True, hide_index=True)
+
+    st.subheader("XGBoost vs Baseline")
+
+    xgb_metrics = model_meta.get("metrics_xgb", {})
+    baseline_metrics = model_meta.get("metrics_baseline", {})
+
+    comparison_df = pd.DataFrame({
+        "Metric": [
+            "MAE",
+            "RMSE",
+            "Breach Recall",
+            "False Alarm Ratio",
+        ],
+        "XGBoost": [
+            f"{xgb_metrics.get('mae', 'N/A')} kW",
+            f"{xgb_metrics.get('rmse', 'N/A')} kW",
+            xgb_metrics.get("recall", "N/A"),
+            xgb_metrics.get("far", "N/A"),
+        ],
+        "Baseline": [
+            f"{baseline_metrics.get('mae', 'N/A')} kW",
+            f"{baseline_metrics.get('rmse', 'N/A')} kW",
+            baseline_metrics.get("recall", "N/A"),
+            baseline_metrics.get("far", "N/A"),
+        ],
+        "Interpretation": [
+            "Lower is better",
+            "Lower is better",
+            "Higher is better",
+            "Lower is better",
+        ],
+    })
+    st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+    if (
+        isinstance(xgb_metrics.get("mae"), (int, float))
+        and isinstance(baseline_metrics.get("mae"), (int, float))
+        and baseline_metrics.get("mae", 0) > 0
+    ):
+        mae_reduction = (
+            (baseline_metrics["mae"] - xgb_metrics["mae"])
+            / baseline_metrics["mae"]
+            * 100.0
+        )
+    else:
+        mae_reduction = None
+
+    if (
+        isinstance(xgb_metrics.get("rmse"), (int, float))
+        and isinstance(baseline_metrics.get("rmse"), (int, float))
+        and baseline_metrics.get("rmse", 0) > 0
+    ):
+        rmse_reduction = (
+            (baseline_metrics["rmse"] - xgb_metrics["rmse"])
+            / baseline_metrics["rmse"]
+            * 100.0
+        )
+    else:
+        rmse_reduction = None
+
+    r1, r2 = st.columns(2)
+    r1.metric(
+        "MAE reduction vs baseline",
+        f"{mae_reduction:.1f}%" if mae_reduction is not None else "N/A",
+    )
+    r2.metric(
+        "RMSE reduction vs baseline",
+        f"{rmse_reduction:.1f}%" if rmse_reduction is not None else "N/A",
+    )
+
+    st.info(
+        "All XGBoost and baseline metrics shown here are calculated from the same "
+        "untouched held-out test rows. The held-out test data are not used to fit "
+        "the final model."
+    )
+
+    with st.expander("Technical metadata"):
+        st.json(model_meta)
 
 st.markdown(f"<div class='commercial-footer'>🛡️ Security Status: Checked | Core Architecture: {model_meta['model_type']} | Horizon: {st.session_state['forecast_horizon']}H</div>", unsafe_allow_html=True)
