@@ -556,6 +556,8 @@ if "last_activated_upload_id" not in st.session_state: st.session_state["last_ac
 if "upload_activation_notice" not in st.session_state: st.session_state["upload_activation_notice"] = None
 if "last_evaluated_upload_key" not in st.session_state: st.session_state["last_evaluated_upload_key"] = None
 if "uploaded_evaluation_summary" not in st.session_state: st.session_state["uploaded_evaluation_summary"] = None
+if "trained_upload_id" not in st.session_state: st.session_state["trained_upload_id"] = None
+if "trained_upload_filename" not in st.session_state: st.session_state["trained_upload_filename"] = None
 if "data_source_status" not in st.session_state: st.session_state["data_source_status"] = "Real UKPN Optimise Prime bundled data"
 
 st.markdown("""
@@ -1064,16 +1066,40 @@ elif nav_selection == "📊 Upload Depot Data":
             )
 
             st.markdown("#### Step 1 — Evaluate the existing model")
-            st.caption(
-                f"This tests the model currently active for "
-                f"**{st.session_state['current_depot']}**. "
-                "The uploaded observations are not used for fitting during this step."
+
+            upload_already_used_for_training = (
+                st.session_state.get("trained_upload_id") == upload_id
             )
+
+            if upload_already_used_for_training:
+                st.warning(
+                    "This uploaded dataset has already been used to train the active "
+                    "model, so it can no longer be treated as unseen data. "
+                    "Upload newer observations that were not used for fitting to assess "
+                    "generalisation."
+                )
+                st.caption(
+                    f"Previously trained file: "
+                    f"**{st.session_state.get('trained_upload_filename') or uploaded_file.name}**"
+                )
+            else:
+                st.caption(
+                    f"This tests the model currently active for "
+                    f"**{st.session_state['current_depot']}** on observations that have "
+                    "not been used to fit that model."
+                )
 
             evaluate_clicked = st.button(
                 "Evaluate Existing Model on Uploaded Data",
                 type="primary",
                 use_container_width=True,
+                disabled=upload_already_used_for_training,
+                help=(
+                    "This file has already been used for training. Upload newer unseen "
+                    "observations to evaluate generalisation."
+                    if upload_already_used_for_training
+                    else "Evaluate the currently fitted model without retraining."
+                ),
             )
 
             if evaluate_clicked:
@@ -1164,12 +1190,17 @@ elif nav_selection == "📊 Upload Depot Data":
             evaluation_done = (
                 st.session_state.get("last_evaluated_upload_key")
                 == evaluation_key
+                and not upload_already_used_for_training
             )
             eval_summary = (
                 st.session_state.get("uploaded_evaluation_summary")
                 if evaluation_done
                 else None
             )
+
+            if upload_already_used_for_training:
+                st.session_state["last_evaluated_upload_key"] = None
+                st.session_state["uploaded_evaluation_summary"] = None
 
             if eval_summary:
                 xgb_eval = eval_summary["xgb_metrics"]
@@ -1229,7 +1260,7 @@ elif nav_selection == "📊 Upload Depot Data":
                     f"Evaluation period: "
                     f"{eval_summary['start']:%d %b %Y %H:%M} to "
                     f"{eval_summary['end']:%d %b %Y %H:%M}. "
-                    "No fitting was performed on these uploaded observations."
+                    "No fitting was performed on these uploaded observations during this evaluation."
                 )
 
                 if xgb_eval["mae"] < base_eval["mae"]:
@@ -1253,14 +1284,23 @@ elif nav_selection == "📊 Upload Depot Data":
             retrain_clicked = st.button(
                 "Retrain XGBoost Using Uploaded Data",
                 use_container_width=True,
-                disabled=not evaluation_done,
+                disabled=(not evaluation_done) or upload_already_used_for_training,
                 help=(
-                    "Evaluate the existing model first. Retraining is enabled after "
-                    "the unseen-data evaluation has completed."
+                    "This exact file has already been used for model fitting."
+                    if upload_already_used_for_training
+                    else (
+                        "Evaluate the existing model first. Retraining is enabled after "
+                        "the unseen-data evaluation has completed."
+                    )
                 ),
             )
 
-            if not evaluation_done:
+            if upload_already_used_for_training:
+                st.caption(
+                    "This file has already been used for retraining. Upload newer data "
+                    "to perform another genuine unseen-data evaluation."
+                )
+            elif not evaluation_done:
                 st.caption(
                     "Complete Step 1 before retraining so generalisation is measured "
                     "before the model is adapted to the uploaded data."
@@ -1333,6 +1373,8 @@ elif nav_selection == "📊 Upload Depot Data":
                         1,
                     )
                     st.session_state["last_activated_upload_id"] = upload_id
+                    st.session_state["trained_upload_id"] = upload_id
+                    st.session_state["trained_upload_filename"] = uploaded_file.name
                     st.session_state["upload_activation_notice"] = {
                         "depot": clean_name,
                         "filename": uploaded_file.name,
@@ -1377,6 +1419,11 @@ elif nav_selection == "📊 Upload Depot Data":
                     st.success(
                         "The retrained uploaded-depot model is now active. "
                         "The dashboard pages will use it while this depot is selected."
+                    )
+                    st.info(
+                        "This uploaded file has now contributed to model fitting. "
+                        "It must not be reused as an 'unseen-data' generalisation test. "
+                        "Upload later/newer telemetry for the next genuine unseen-data evaluation."
                     )
 
                 except Exception as retrain_exc:
