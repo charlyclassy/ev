@@ -933,7 +933,7 @@ if nav_selection == "🏠 Home / Overview":
     <div style='background-color: #FFFFFF; border: 1px solid #E2E8F0; padding: 16px; border-radius: 8px; margin-bottom: 20px;'>
         <table style='width:100%; font-size: 14px;'>
             <tr style='font-size: 11px; color: #64748B; text-transform: uppercase;'>
-                <td>Corporate Workspace</td><td>Operational Status</td><td>Expected Capacity Breach</td>
+                <td>Organisation</td><td>Operational Status</td><td>Expected Capacity Breach</td>
             </tr>
             <tr>
                 <td style='font-weight:700;'>{st.session_state['org_name']}</td>
