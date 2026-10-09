@@ -600,6 +600,7 @@ if "last_evaluated_upload_key" not in st.session_state: st.session_state["last_e
 if "uploaded_evaluation_summary" not in st.session_state: st.session_state["uploaded_evaluation_summary"] = None
 if "trained_upload_id" not in st.session_state: st.session_state["trained_upload_id"] = None
 if "trained_upload_filename" not in st.session_state: st.session_state["trained_upload_filename"] = None
+if "retraining_completion_summary" not in st.session_state: st.session_state["retraining_completion_summary"] = None
 if "data_source_status" not in st.session_state: st.session_state["data_source_status"] = "Real UKPN Optimise Prime bundled data"
 
 st.markdown("""
@@ -1458,15 +1459,21 @@ elif nav_selection == "📊 Upload Depot Data":
                         f"Held-out test: {completed_meta.get('test_period', 'N/A')}"
                     )
 
-                    st.success(
-                        "The retrained uploaded-depot model is now active. "
-                        "The dashboard pages will use it while this depot is selected."
-                    )
-                    st.info(
-                        "This uploaded file has now contributed to model fitting. "
-                        "It must not be reused as an 'unseen-data' generalisation test. "
-                        "Upload later/newer telemetry for the next genuine unseen-data evaluation."
-                    )
+                    st.session_state["retraining_completion_summary"] = {
+                        "upload_id": upload_id,
+                        "depot": clean_name,
+                        "mae": completed_meta["metrics_xgb"]["mae"],
+                        "rmse": completed_meta["metrics_xgb"]["rmse"],
+                        "recall": completed_meta["metrics_xgb"]["recall"],
+                        "far": completed_meta["metrics_xgb"]["far"],
+                        "train_period": completed_meta.get("train_period", "N/A"),
+                        "validation_period": completed_meta.get("validation_period", "N/A"),
+                        "test_period": completed_meta.get("test_period", "N/A"),
+                    }
+
+                    # Rerun so the sidebar is rebuilt immediately with the newly
+                    # activated uploaded depot included in the selector.
+                    st.rerun()
 
                 except Exception as retrain_exc:
                     progress_bar.empty()
@@ -1476,6 +1483,35 @@ elif nav_selection == "📊 Upload Depot Data":
                         expanded=True,
                     )
                     retrain_status.write(str(retrain_exc))
+
+            completion = st.session_state.get("retraining_completion_summary")
+            if (
+                completion
+                and completion.get("upload_id") == upload_id
+                and completion.get("depot") == st.session_state.get("uploaded_depot_name")
+            ):
+                st.success(
+                    f"✅ Retraining completed for **{completion['depot']}**. "
+                    "The new depot is now active and has been added to the left-hand depot selector."
+                )
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Held-out MAE", f"{completion['mae']} kW")
+                c2.metric("Held-out RMSE", f"{completion['rmse']} kW")
+                c3.metric("Breach Recall", f"{completion['recall']}")
+                c4.metric("False Alarm Ratio", f"{completion['far']}")
+
+                st.caption(
+                    f"Training: {completion['train_period']}  |  "
+                    f"Validation: {completion['validation_period']}  |  "
+                    f"Held-out test: {completion['test_period']}"
+                )
+
+                st.info(
+                    "This uploaded file has now contributed to model fitting and is no "
+                    "longer valid as unseen data. Upload later/newer telemetry for the "
+                    "next genuine generalisation test."
+                )
 
         except Exception as exc:
             st.error(f"Upload validation failed: {exc}")
