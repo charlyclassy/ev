@@ -458,9 +458,9 @@ elif nav_selection == "🏢 Depots Setup":
     st.title("🏢 Depot Configuration Registry")
     with st.container(border=True):
         st.session_state["org_name"] = st.text_input("Organization Title", value=st.session_state["org_name"])
-        st.session_state["grid_limit"] = st.number_input("Depot Capacity Constraint Ceiling (kW)", value=float(st.session_state["grid_limit"]), min_value=0.0, step=1.0)
-        st.session_state["warn_threshold"] = st.number_input("Proactive Warning Boundary (kW)", value=float(st.session_state["warn_threshold"]), min_value=0.0, step=1.0)
-        if st.button("Persist Operational Configuration"):
+        st.session_state["grid_limit"] = st.number_input("Planning Capacity Threshold (kW)", value=float(st.session_state["grid_limit"]), min_value=0.0, step=1.0)
+        st.session_state["warn_threshold"] = st.number_input("Warning Threshold (kW)", value=float(st.session_state["warn_threshold"]), min_value=0.0, step=1.0)
+        if st.button("Save Depot Configuration"):
             st.toast("Substation configuration targets saved successfully.")
 
 elif nav_selection == "📊 Upload Depot Data":
