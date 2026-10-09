@@ -985,8 +985,6 @@ elif nav_selection == "🚨 System Alerts":
         st.error(f"**{alert_status}** — {status_reason}")
     elif alert_status == "Warning":
         st.warning(f"**{alert_status}** — {status_reason}")
-    else:
-        st.success(f"**{alert_status}** — {status_reason}")
 
     ledger = pd.DataFrame([{
         "Forecast Reference Time": latest_data_timestamp.strftime("%d %b %Y, %H:%M"),
