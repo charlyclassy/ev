@@ -678,9 +678,18 @@ elif nav_selection == "⚙️ Model Performance":
     st.plotly_chart(fig_res, use_container_width=True)
 
     # Plot 3A: Actual vs Predicted scatter — full range
-    scatter_min = 0.0
-    scatter_max = float(max(y_test.max(), xgb_predictions.max()))
-    scatter_max = max(1.0, scatter_max * 1.05)
+    # Both axes use the same numeric range and start at zero.
+    # Do not physically lock the Plotly aspect ratio: that can make the chart
+    # unnecessarily narrow on wide Streamlit screens.
+    scatter_max_raw = float(max(y_test.max(), xgb_predictions.max()))
+    scatter_max = max(1.0, np.ceil(scatter_max_raw * 1.05))
+
+    st.subheader("Actual vs Predicted Scatter — Full Held-Out Test Period")
+    st.caption(
+        f"R² = **{r2:.3f}** | "
+        f"MAE = **{model_meta['metrics_xgb']['mae']} kW** | "
+        f"RMSE = **{model_meta['metrics_xgb']['rmse']} kW**"
+    )
 
     fig_scat_full = go.Figure()
     fig_scat_full.add_trace(
@@ -688,9 +697,13 @@ elif nav_selection == "⚙️ Model Performance":
             x=y_test.values,
             y=xgb_predictions,
             mode="markers",
-            marker=dict(size=5, opacity=0.28, color="#2563EB"),
+            marker=dict(size=5, opacity=0.24, color="#2563EB"),
             name="Held-out observations",
-            hovertemplate="Actual: %{x:.2f} kW<br>Predicted: %{y:.2f} kW<extra></extra>",
+            hovertemplate=(
+                "Actual: %{x:.2f} kW"
+                "<br>Predicted: %{y:.2f} kW"
+                "<extra></extra>"
+            ),
         )
     )
     fig_scat_full.add_trace(
@@ -704,23 +717,23 @@ elif nav_selection == "⚙️ Model Performance":
         )
     )
     fig_scat_full.update_layout(
-        title={
-            "text": "Actual vs Predicted Scatter — Full Held-Out Test Period"
-                    f"<br><sup>R² = {r2:.3f} | MAE = {model_meta['metrics_xgb']['mae']} kW"
-                    f" | RMSE = {model_meta['metrics_xgb']['rmse']} kW</sup>",
-            "x": 0.01,
-        },
         xaxis_title="Actual Demand (kW)",
         yaxis_title="XGBoost Predicted Demand (kW)",
         template="plotly_white",
-        height=500,
-        legend=dict(orientation="h", y=1.10),
-        margin=dict(l=20, r=20, t=90, b=35),
+        height=520,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.01,
+            xanchor="left",
+            x=0.0,
+        ),
+        margin=dict(l=25, r=25, t=55, b=45),
+        hovermode="closest",
     )
     fig_scat_full.update_xaxes(
         range=[0, scatter_max],
         autorange=False,
-        constrain="domain",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
         zeroline=True,
@@ -729,9 +742,6 @@ elif nav_selection == "⚙️ Model Performance":
     fig_scat_full.update_yaxes(
         range=[0, scatter_max],
         autorange=False,
-        scaleanchor="x",
-        scaleratio=1,
-        constrain="domain",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
         zeroline=True,
@@ -740,25 +750,40 @@ elif nav_selection == "⚙️ Model Performance":
     st.plotly_chart(fig_scat_full, use_container_width=True)
 
     # Plot 3B: Actual vs Predicted scatter — zoomed central view
-    # Use the 95th percentile of actual/predicted demand so the dense central relationship
-    # is easy to interpret without discarding the full-range view above.
     central_upper = float(
         max(
             np.percentile(y_test.values, 95),
             np.percentile(xgb_predictions, 95),
         )
     )
-    central_upper = max(1.0, central_upper * 1.05)
+    central_upper = max(1.0, np.ceil(central_upper * 1.05))
+
+    central_mask = (
+        (y_test.values >= 0)
+        & (y_test.values <= central_upper)
+        & (xgb_predictions >= 0)
+        & (xgb_predictions <= central_upper)
+    )
+
+    st.subheader("Actual vs Predicted Scatter — Zoomed Central View")
+    st.caption(
+        f"Central 95% of demand range | R² = **{r2:.3f}** | "
+        "Full-range scatter shown above."
+    )
 
     fig_scat_zoom = go.Figure()
     fig_scat_zoom.add_trace(
         go.Scatter(
-            x=y_test.values,
-            y=xgb_predictions,
+            x=y_test.values[central_mask],
+            y=xgb_predictions[central_mask],
             mode="markers",
-            marker=dict(size=5, opacity=0.28, color="#2563EB"),
+            marker=dict(size=5, opacity=0.24, color="#2563EB"),
             name="Held-out observations",
-            hovertemplate="Actual: %{x:.2f} kW<br>Predicted: %{y:.2f} kW<extra></extra>",
+            hovertemplate=(
+                "Actual: %{x:.2f} kW"
+                "<br>Predicted: %{y:.2f} kW"
+                "<extra></extra>"
+            ),
         )
     )
     fig_scat_zoom.add_trace(
@@ -772,22 +797,23 @@ elif nav_selection == "⚙️ Model Performance":
         )
     )
     fig_scat_zoom.update_layout(
-        title={
-            "text": "Actual vs Predicted Scatter — Zoomed Central View"
-                    f"<br><sup>Central 95% of demand range | R² = {r2:.3f}</sup>",
-            "x": 0.01,
-        },
         xaxis_title="Actual Demand (kW)",
         yaxis_title="XGBoost Predicted Demand (kW)",
         template="plotly_white",
         height=500,
-        legend=dict(orientation="h", y=1.10),
-        margin=dict(l=20, r=20, t=90, b=35),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.01,
+            xanchor="left",
+            x=0.0,
+        ),
+        margin=dict(l=25, r=25, t=55, b=45),
+        hovermode="closest",
     )
     fig_scat_zoom.update_xaxes(
         range=[0, central_upper],
         autorange=False,
-        constrain="domain",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
         zeroline=True,
@@ -796,9 +822,6 @@ elif nav_selection == "⚙️ Model Performance":
     fig_scat_zoom.update_yaxes(
         range=[0, central_upper],
         autorange=False,
-        scaleanchor="x",
-        scaleratio=1,
-        constrain="domain",
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
         zeroline=True,
@@ -807,99 +830,115 @@ elif nav_selection == "⚙️ Model Performance":
     st.plotly_chart(fig_scat_zoom, use_container_width=True)
 
     # Plot 4A: Residual distribution — full held-out range
-    hist_counts, hist_edges = np.histogram(residuals, bins=50)
-    hist_centres = (hist_edges[:-1] + hist_edges[1:]) / 2
     mean_residual = float(np.mean(residuals))
+    median_residual = float(np.median(residuals))
+
+    st.subheader("Residual Distribution — Full Held-Out Test Period")
+    st.caption(
+        f"Residual = Actual − Predicted | "
+        f"Mean residual = **{mean_residual:.2f} kW** | "
+        f"Median residual = **{median_residual:.2f} kW**"
+    )
 
     fig_hist_full = go.Figure()
     fig_hist_full.add_trace(
-        go.Bar(
-            x=hist_centres,
-            y=hist_counts,
+        go.Histogram(
+            x=residuals,
+            nbinsx=60,
             name="Residual count",
             marker=dict(color="#4F66F2"),
-            hovertemplate="Residual: %{x:.2f} kW<br>Count: %{y}<extra></extra>",
+            hovertemplate="Residual bin: %{x:.2f} kW<br>Count: %{y}<extra></extra>",
         )
     )
     fig_hist_full.add_vline(
         x=0,
-        line=dict(color="#64748B", dash="dash", width=1.5),
-        annotation_text="Zero error",
-        annotation_position="top",
+        line=dict(color="#64748B", dash="dash", width=1.6),
     )
     fig_hist_full.add_vline(
         x=mean_residual,
-        line=dict(color="#0F172A", dash="dot", width=1.2),
-        annotation_text=f"Mean = {mean_residual:.2f} kW",
-        annotation_position="bottom right",
+        line=dict(color="#0F172A", dash="dot", width=1.3),
     )
     fig_hist_full.update_layout(
-        title="Residual Distribution — Full Held-Out Test Period",
         xaxis_title="Residual (Actual - Predicted) kW",
         yaxis_title="Count",
         template="plotly_white",
-        height=380,
-        margin=dict(l=20, r=20, t=60, b=35),
+        height=390,
+        bargap=0.04,
+        showlegend=False,
+        margin=dict(l=25, r=25, t=25, b=45),
     )
-    fig_hist_full.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
-    fig_hist_full.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
+    fig_hist_full.update_xaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_hist_full.update_yaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+        rangemode="tozero",
+    )
     st.plotly_chart(fig_hist_full, use_container_width=True)
 
     # Plot 4B: Residual distribution — zoomed central view
-    # Keep the full histogram above for transparency; this second view focuses on
-    # the central error distribution only.
-    zoom_limit = min(
-        5.0,
-        max(
-            1.0,
-            float(np.percentile(np.abs(residuals), 95))
-        )
-    )
+    # The 95th-percentile absolute residual defines a data-driven central range.
+    zoom_limit = float(np.percentile(np.abs(residuals), 95))
+    zoom_limit = max(1.0, min(5.0, zoom_limit))
+
     zoomed_residuals = residuals[
         (residuals >= -zoom_limit) & (residuals <= zoom_limit)
     ]
 
-    zoom_counts, zoom_edges = np.histogram(
-        zoomed_residuals,
-        bins=30,
-        range=(-zoom_limit, zoom_limit),
+    central_share = 100.0 * len(zoomed_residuals) / len(residuals)
+
+    st.subheader("Residual Distribution — Zoomed Central View")
+    st.caption(
+        f"Central range: **−{zoom_limit:.2f} to +{zoom_limit:.2f} kW** | "
+        f"Contains **{central_share:.1f}%** of held-out residuals | "
+        "Full distribution shown above."
     )
-    zoom_centres = (zoom_edges[:-1] + zoom_edges[1:]) / 2
 
     fig_hist_zoom = go.Figure()
     fig_hist_zoom.add_trace(
-        go.Bar(
-            x=zoom_centres,
-            y=zoom_counts,
+        go.Histogram(
+            x=zoomed_residuals,
+            nbinsx=40,
+            xbins=dict(
+                start=-zoom_limit,
+                end=zoom_limit,
+                size=(2 * zoom_limit) / 40,
+            ),
             name="Residual count",
             marker=dict(color="#4F66F2"),
-            hovertemplate="Residual: %{x:.2f} kW<br>Count: %{y}<extra></extra>",
+            hovertemplate="Residual bin: %{x:.2f} kW<br>Count: %{y}<extra></extra>",
         )
     )
     fig_hist_zoom.add_vline(
         x=0,
-        line=dict(color="#64748B", dash="dash", width=1.5),
-        annotation_text="Zero error",
-        annotation_position="top",
+        line=dict(color="#64748B", dash="dash", width=1.6),
+    )
+    fig_hist_zoom.add_vline(
+        x=mean_residual,
+        line=dict(color="#0F172A", dash="dot", width=1.3),
     )
     fig_hist_zoom.update_layout(
-        title={
-            "text": "Residual Distribution — Zoomed Central View"
-                    f"<br><sup>Displayed range: ±{zoom_limit:.2f} kW | Full distribution shown above</sup>",
-            "x": 0.01,
-        },
         xaxis_title="Residual (Actual - Predicted) kW",
         yaxis_title="Count",
         template="plotly_white",
-        height=380,
-        margin=dict(l=20, r=20, t=80, b=35),
+        height=390,
+        bargap=0.04,
+        showlegend=False,
+        margin=dict(l=25, r=25, t=25, b=45),
     )
     fig_hist_zoom.update_xaxes(
         range=[-zoom_limit, zoom_limit],
+        autorange=False,
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
     )
-    fig_hist_zoom.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
+    fig_hist_zoom.update_yaxes(
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+        rangemode="tozero",
+    )
     st.plotly_chart(fig_hist_zoom, use_container_width=True)
 
 elif nav_selection == "🚨 System Alerts":
