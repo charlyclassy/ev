@@ -462,8 +462,82 @@ def execute_production_ml_pipeline(
         "errors": errors,
         "future_times": future_times,
         "future_forecast": future_forecast,
+        "model": model,
+        "feature_cols": feature_cols,
     }
 
+
+
+def evaluate_existing_model_on_uploaded_data(
+    current_model,
+    expected_feature_cols: list[str],
+    raw_uploaded_df: pd.DataFrame,
+    capacity_kw: float,
+) -> dict:
+    """
+    Evaluate the currently fitted XGBoost model on uploaded telemetry.
+
+    IMPORTANT: this function never calls fit(). The uploaded observations are
+    therefore unseen by the current model during this evaluation.
+    """
+    standardised = _standardise_input(raw_uploaded_df)
+    feat, upload_feature_cols = _build_features(standardised)
+
+    if list(upload_feature_cols) != list(expected_feature_cols):
+        raise ValueError(
+            "Uploaded telemetry produced a feature structure that is not compatible "
+            "with the currently fitted model."
+        )
+
+    if feat.empty:
+        raise ValueError(
+            "No evaluable rows remain after the lag/rolling-feature warm-up period."
+        )
+
+    X_unseen = feat[expected_feature_cols]
+    y_unseen = feat["Demand_kW"].to_numpy(dtype=float)
+
+    preds = np.clip(current_model.predict(X_unseen), 0, None)
+    baseline = feat["Lag_96"].to_numpy(dtype=float)
+
+    def metrics(y_true, y_pred):
+        mae = float(mean_absolute_error(y_true, y_pred))
+        rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+        r2 = float(r2_score(y_true, y_pred))
+
+        actual_breach = y_true >= capacity_kw
+        pred_breach = y_pred >= capacity_kw
+        tp = int(np.sum(actual_breach & pred_breach))
+        fp = int(np.sum((~actual_breach) & pred_breach))
+        fn = int(np.sum(actual_breach & (~pred_breach)))
+
+        recall = (100.0 * tp / (tp + fn)) if (tp + fn) else None
+        far = (100.0 * fp / (tp + fp)) if (tp + fp) else None
+
+        return {
+            "mae": mae,
+            "rmse": rmse,
+            "r2": r2,
+            "recall": recall,
+            "far": far,
+            "tp": tp,
+            "fp": fp,
+            "fn": fn,
+        }
+
+    xgb_metrics = metrics(y_unseen, preds)
+    baseline_metrics = metrics(y_unseen, baseline)
+
+    return {
+        "start": feat.index.min(),
+        "end": feat.index.max(),
+        "rows": len(feat),
+        "actual": y_unseen,
+        "predictions": preds,
+        "baseline": baseline,
+        "xgb_metrics": xgb_metrics,
+        "baseline_metrics": baseline_metrics,
+    }
 
 # ===================================================================== #
 # SESSION STATE / UI                                                     #
@@ -480,6 +554,8 @@ if "uploaded_depot_name" not in st.session_state: st.session_state["uploaded_dep
 if "uploaded_capacity_kw" not in st.session_state: st.session_state["uploaded_capacity_kw"] = None
 if "last_activated_upload_id" not in st.session_state: st.session_state["last_activated_upload_id"] = None
 if "upload_activation_notice" not in st.session_state: st.session_state["upload_activation_notice"] = None
+if "last_evaluated_upload_key" not in st.session_state: st.session_state["last_evaluated_upload_key"] = None
+if "uploaded_evaluation_summary" not in st.session_state: st.session_state["uploaded_evaluation_summary"] = None
 if "data_source_status" not in st.session_state: st.session_state["data_source_status"] = "Real UKPN Optimise Prime bundled data"
 
 st.markdown("""
@@ -893,8 +969,9 @@ elif nav_selection == "📊 Upload Depot Data":
 
     st.markdown("### Import depot telemetry data")
     st.caption(
-        "Use this page to upload telemetry for a depot that is not already included "
-        "in the built-in Optimise Prime dataset, or to analyse newer depot telemetry."
+        "Upload telemetry for a new depot or newer observations. "
+        "Evaluate the currently fitted model on the unseen data first; retrain only "
+        "when adaptation is required."
     )
     st.markdown(
         "**Supported formats:** CSV, XLSX  •  **Maximum file size:** 200 MB"
@@ -903,7 +980,7 @@ elif nav_selection == "📊 Upload Depot Data":
     uploaded_depot_label = st.text_input(
         "Uploaded depot name",
         value=st.session_state.get("uploaded_depot_name") or "New Depot",
-        help="This name will appear in the depot selector after validation succeeds.",
+        help="Used if you later choose to activate a retrained model for this dataset.",
     )
 
     uploaded_file = st.file_uploader(
@@ -915,7 +992,10 @@ elif nav_selection == "📊 Upload Depot Data":
     if uploaded_file is not None:
         try:
             file_bytes = uploaded_file.getvalue()
-            upload_id = f"{uploaded_file.name}:{len(file_bytes)}:{hash(file_bytes[:4096])}"
+            upload_id = (
+                f"{uploaded_file.name}:{len(file_bytes)}:"
+                f"{hash(file_bytes[:4096])}"
+            )
 
             if uploaded_file.name.lower().endswith(".csv"):
                 raw_uploaded_df = pd.read_csv(uploaded_file)
@@ -932,7 +1012,10 @@ elif nav_selection == "📊 Upload Depot Data":
             v1.metric("Raw rows", f"{validation['raw_rows']:,}")
             v2.metric("15-min rows", f"{validation['standardised_rows']:,}")
             v3.metric("Coverage", f"{validation['coverage_days']:.1f} days")
-            v4.metric("Invalid rows removed", f"{validation['invalid_rows_removed']:,}")
+            v4.metric(
+                "Invalid rows removed",
+                f"{validation['invalid_rows_removed']:,}",
+            )
 
             validation_table = pd.DataFrame(
                 [
@@ -941,9 +1024,11 @@ elif nav_selection == "📊 Upload Depot Data":
                     ("Prepared sampling interval", validation["sampling_interval"]),
                     ("Start", validation["start"].strftime("%d %b %Y %H:%M")),
                     ("End", validation["end"].strftime("%d %b %Y %H:%M")),
-                    ("Negative demand values clipped", validation["negative_values_clipped"]),
+                    (
+                        "Negative demand values clipped",
+                        validation["negative_values_clipped"],
+                    ),
                     ("Minimum history check", "Passed (≥ 28 days)"),
-                    ("Chronological split", "70% train / 15% validation / 15% held-out test"),
                 ],
                 columns=["Validation Check", "Result"],
             )
@@ -964,14 +1049,222 @@ elif nav_selection == "📊 Upload Depot Data":
                 step=1.0,
                 help=(
                     "A default is derived from the development portion of the uploaded "
-                    "telemetry. You may replace it with a verified planning value."
+                    "telemetry. Replace it with a verified planning value if available."
                 ),
             )
 
-            retrain_clicked = st.button(
-                "Activate Data & Retrain XGBoost",
+            evaluation_key = (
+                f"{upload_id}:{float(uploaded_capacity):.3f}:"
+                f"{st.session_state['current_depot']}:"
+                f"{model_meta.get('training_date', '')}"
+            )
+            evaluation_done = (
+                st.session_state.get("last_evaluated_upload_key")
+                == evaluation_key
+            )
+
+            st.markdown("#### Step 1 — Evaluate the existing model")
+            st.caption(
+                f"This tests the model currently active for "
+                f"**{st.session_state['current_depot']}**. "
+                "The uploaded observations are not used for fitting during this step."
+            )
+
+            evaluate_clicked = st.button(
+                "Evaluate Existing Model on Uploaded Data",
+                type="primary",
                 use_container_width=True,
             )
+
+            if evaluate_clicked:
+                eval_progress = st.progress(
+                    0,
+                    text="0% — Starting unseen-data evaluation",
+                )
+                eval_status = st.status(
+                    "🔎 Evaluating existing model",
+                    state="running",
+                    expanded=True,
+                )
+
+                try:
+                    eval_progress.progress(
+                        20,
+                        text="20% — Standardising uploaded telemetry",
+                    )
+                    eval_status.write(
+                        "**20%** — Standardising timestamps and 15-minute demand"
+                    )
+
+                    eval_progress.progress(
+                        45,
+                        text="45% — Building the same causal feature structure",
+                    )
+                    eval_status.write(
+                        "**45%** — Building calendar, lag and rolling features"
+                    )
+
+                    eval_progress.progress(
+                        65,
+                        text="65% — Running the existing XGBoost model without retraining",
+                    )
+                    eval_status.write(
+                        "**65%** — Predicting with the currently fitted XGBoost model"
+                    )
+
+                    evaluation = evaluate_existing_model_on_uploaded_data(
+                        pipeline["model"],
+                        pipeline["feature_cols"],
+                        raw_uploaded_df,
+                        float(uploaded_capacity),
+                    )
+
+                    eval_progress.progress(
+                        90,
+                        text="90% — Comparing XGBoost with the previous-day baseline",
+                    )
+                    eval_status.write(
+                        "**90%** — Calculating held-out-style error and breach metrics"
+                    )
+
+                    xgb_eval = evaluation["xgb_metrics"]
+                    base_eval = evaluation["baseline_metrics"]
+
+                    st.session_state["last_evaluated_upload_key"] = evaluation_key
+                    st.session_state["uploaded_evaluation_summary"] = {
+                        "depot_name": uploaded_depot_label.strip() or "Uploaded Depot",
+                        "source_model_depot": st.session_state["current_depot"],
+                        "start": evaluation["start"],
+                        "end": evaluation["end"],
+                        "rows": evaluation["rows"],
+                        "xgb_metrics": xgb_eval,
+                        "baseline_metrics": base_eval,
+                    }
+
+                    eval_progress.progress(
+                        100,
+                        text="100% — Existing-model evaluation completed",
+                    )
+                    eval_status.update(
+                        label="✅ Existing-model evaluation completed",
+                        state="complete",
+                        expanded=True,
+                    )
+
+                except Exception as eval_exc:
+                    eval_progress.empty()
+                    eval_status.update(
+                        label="❌ Existing-model evaluation failed",
+                        state="error",
+                        expanded=True,
+                    )
+                    eval_status.write(str(eval_exc))
+
+            # Persist evaluation results below the button on subsequent reruns.
+            evaluation_done = (
+                st.session_state.get("last_evaluated_upload_key")
+                == evaluation_key
+            )
+            eval_summary = (
+                st.session_state.get("uploaded_evaluation_summary")
+                if evaluation_done
+                else None
+            )
+
+            if eval_summary:
+                xgb_eval = eval_summary["xgb_metrics"]
+                base_eval = eval_summary["baseline_metrics"]
+
+                e1, e2, e3, e4 = st.columns(4)
+                e1.metric("Unseen-data MAE", f"{xgb_eval['mae']:.2f} kW")
+                e2.metric("Unseen-data RMSE", f"{xgb_eval['rmse']:.2f} kW")
+                e3.metric("R²", f"{xgb_eval['r2']:.3f}")
+                e4.metric("Evaluated rows", f"{eval_summary['rows']:,}")
+
+                comparison = pd.DataFrame(
+                    {
+                        "Metric": [
+                            "MAE",
+                            "RMSE",
+                            "Breach Recall",
+                            "False Alarm Ratio",
+                        ],
+                        "Existing XGBoost": [
+                            f"{xgb_eval['mae']:.2f} kW",
+                            f"{xgb_eval['rmse']:.2f} kW",
+                            (
+                                f"{xgb_eval['recall']:.2f}%"
+                                if xgb_eval["recall"] is not None
+                                else "N/A"
+                            ),
+                            (
+                                f"{xgb_eval['far']:.2f}%"
+                                if xgb_eval["far"] is not None
+                                else "N/A"
+                            ),
+                        ],
+                        "Previous-Day Baseline": [
+                            f"{base_eval['mae']:.2f} kW",
+                            f"{base_eval['rmse']:.2f} kW",
+                            (
+                                f"{base_eval['recall']:.2f}%"
+                                if base_eval["recall"] is not None
+                                else "N/A"
+                            ),
+                            (
+                                f"{base_eval['far']:.2f}%"
+                                if base_eval["far"] is not None
+                                else "N/A"
+                            ),
+                        ],
+                    }
+                )
+                st.dataframe(
+                    comparison,
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                st.caption(
+                    f"Evaluation period: "
+                    f"{eval_summary['start']:%d %b %Y %H:%M} to "
+                    f"{eval_summary['end']:%d %b %Y %H:%M}. "
+                    "No fitting was performed on these uploaded observations."
+                )
+
+                if xgb_eval["mae"] < base_eval["mae"]:
+                    st.success(
+                        "The existing XGBoost model outperforms the previous-day "
+                        "baseline on this uploaded dataset. Retraining is optional."
+                    )
+                else:
+                    st.warning(
+                        "The existing XGBoost model does not outperform the "
+                        "previous-day baseline on MAE. Review the results before retraining."
+                    )
+
+            st.markdown("#### Step 2 — Retrain only if adaptation is needed")
+            st.caption(
+                "Retraining fits a new 340-tree XGBoost model to this uploaded dataset "
+                "using a chronological 70% training / 15% validation / 15% held-out "
+                "test split. The final 15% remains untouched during fitting."
+            )
+
+            retrain_clicked = st.button(
+                "Retrain XGBoost Using Uploaded Data",
+                use_container_width=True,
+                disabled=not evaluation_done,
+                help=(
+                    "Evaluate the existing model first. Retraining is enabled after "
+                    "the unseen-data evaluation has completed."
+                ),
+            )
+
+            if not evaluation_done:
+                st.caption(
+                    "Complete Step 1 before retraining so generalisation is measured "
+                    "before the model is adapted to the uploaded data."
+                )
 
             if retrain_clicked:
                 clean_name = uploaded_depot_label.strip() or "Uploaded Depot"
@@ -994,7 +1287,9 @@ elif nav_selection == "📊 Upload Depot Data":
                         text=f"{percent}% — {message}",
                     )
                     if message != last_message["text"]:
-                        retrain_status.write(f"**{percent}%** — {message}")
+                        retrain_status.write(
+                            f"**{percent}%** — {message}"
+                        )
                         last_message["text"] = message
 
                 try:
@@ -1002,8 +1297,13 @@ elif nav_selection == "📊 Upload Depot Data":
                         "Model configuration: **XGBoost, 340 boosting rounds / trees**"
                     )
                     retrain_status.write(
-                        "Uploaded-data split: **70% training / 15% validation / 15% held-out test**"
+                        "Uploaded-data split: **70% training / 15% validation / "
+                        "15% untouched held-out test**"
                     )
+
+                    # This button means retrain, so clear the cached fitted pipeline
+                    # to guarantee a new fit rather than returning a cached result.
+                    execute_production_ml_pipeline.clear()
 
                     retrained_pipeline = execute_production_ml_pipeline(
                         clean_name,
@@ -1021,12 +1321,16 @@ elif nav_selection == "📊 Upload Depot Data":
                         "rows": len(raw_uploaded_df),
                         "columns": list(raw_uploaded_df.columns),
                         "validation": validation,
-                        "split_strategy": "70% train / 15% validation / 15% held-out test",
+                        "split_strategy": (
+                            "70% train / 15% validation / 15% held-out test"
+                        ),
+                        "pre_retrain_evaluation": eval_summary,
                     }
                     st.session_state["current_depot"] = clean_name
                     st.session_state["grid_limit"] = float(uploaded_capacity)
                     st.session_state["warn_threshold"] = round(
-                        WARNING_ALPHA * float(uploaded_capacity), 1
+                        WARNING_ALPHA * float(uploaded_capacity),
+                        1,
                     )
                     st.session_state["last_activated_upload_id"] = upload_id
                     st.session_state["upload_activation_notice"] = {
@@ -1048,16 +1352,20 @@ elif nav_selection == "📊 Upload Depot Data":
                     )
 
                     retrain_status.write(
-                        f"Held-out MAE: **{completed_meta['metrics_xgb']['mae']} kW**"
+                        f"Held-out MAE: "
+                        f"**{completed_meta['metrics_xgb']['mae']} kW**"
                     )
                     retrain_status.write(
-                        f"Held-out RMSE: **{completed_meta['metrics_xgb']['rmse']} kW**"
+                        f"Held-out RMSE: "
+                        f"**{completed_meta['metrics_xgb']['rmse']} kW**"
                     )
                     retrain_status.write(
-                        f"Breach Recall: **{completed_meta['metrics_xgb']['recall']}**"
+                        f"Breach Recall: "
+                        f"**{completed_meta['metrics_xgb']['recall']}**"
                     )
                     retrain_status.write(
-                        f"False Alarm Ratio: **{completed_meta['metrics_xgb']['far']}**"
+                        f"False Alarm Ratio: "
+                        f"**{completed_meta['metrics_xgb']['far']}**"
                     )
 
                     st.caption(
@@ -1067,8 +1375,8 @@ elif nav_selection == "📊 Upload Depot Data":
                     )
 
                     st.success(
-                        "The uploaded depot is now active. The other dashboard pages "
-                        "will use this retrained model while this depot is selected."
+                        "The retrained uploaded-depot model is now active. "
+                        "The dashboard pages will use it while this depot is selected."
                     )
 
                 except Exception as retrain_exc:
@@ -1085,7 +1393,8 @@ elif nav_selection == "📊 Upload Depot Data":
 
     elif st.session_state.get("uploaded_df") is not None:
         st.info(
-            f"Active uploaded depot: **{st.session_state.get('uploaded_depot_name', 'Uploaded Depot')}**. "
+            f"Active uploaded depot: "
+            f"**{st.session_state.get('uploaded_depot_name', 'Uploaded Depot')}**. "
             "Select it from the sidebar to use its retrained model and forecasts."
         )
 
