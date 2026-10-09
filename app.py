@@ -960,26 +960,42 @@ elif nav_selection == "📋 Reports":
 
     xgb_metrics = model_meta.get("metrics_xgb", {})
 
-    report_df = pd.DataFrame([{
-        "Depot Name": st.session_state["current_depot"],
-        "Model": "XGBoost",
-        "Trees": 340,
-        "Planning Capacity Threshold kW": round(float(st.session_state["grid_limit"]), 2),
-        "Forecast Horizon Hours": int(model_meta.get("forecast_horizon_hours", st.session_state["forecast_horizon"])),
-        "Predicted Peak kW": round(float(predicted_peak), 2),
-        "MAE kW": xgb_metrics.get("mae", "N/A"),
-        "RMSE kW": xgb_metrics.get("rmse", "N/A"),
-        "Breach Recall": xgb_metrics.get("recall", "N/A"),
-        "False Alarm Ratio": xgb_metrics.get("far", "N/A"),
-        "Training Period": model_meta.get("train_period", "Not available"),
-        "Validation Period": model_meta.get("validation_period", "Not available"),
-        "Held-out Test Period": model_meta.get("test_period", "Not available"),
-        "Test Rows": int(model_meta.get("test_observations", len(y_test))),
-        "Synthetic Data Used": "No" if not bool(model_meta.get("synthetic_data_used", False)) else "Yes",
-    }])
+    report_rows = [
+        ("Depot Name", st.session_state["current_depot"]),
+        ("Model", "XGBoost"),
+        ("Trees", "340"),
+        (
+            "Planning Capacity Threshold",
+            f"{float(st.session_state['grid_limit']):.2f} kW",
+        ),
+        (
+            "Forecast Horizon",
+            f"{int(model_meta.get('forecast_horizon_hours', st.session_state['forecast_horizon']))} hours",
+        ),
+        ("Predicted Peak", f"{float(predicted_peak):.2f} kW"),
+        ("MAE", f"{xgb_metrics.get('mae', 'N/A')} kW"),
+        ("RMSE", f"{xgb_metrics.get('rmse', 'N/A')} kW"),
+        ("Breach Recall", xgb_metrics.get("recall", "N/A")),
+        ("False Alarm Ratio", xgb_metrics.get("far", "N/A")),
+        ("Training Period", model_meta.get("train_period", "Not available")),
+        ("Validation Period", model_meta.get("validation_period", "Not available")),
+        ("Held-out Test Period", model_meta.get("test_period", "Not available")),
+        ("Test Rows", f"{int(model_meta.get('test_observations', len(y_test))):,}"),
+        (
+            "Synthetic Data Used",
+            "No" if not bool(model_meta.get("synthetic_data_used", False)) else "Yes",
+        ),
+    ]
+
+    report_df = pd.DataFrame(report_rows, columns=["Report Field", "Value"])
 
     st.subheader("Operational Asset Report Preview")
-    st.dataframe(report_df, use_container_width=True, hide_index=True)
+    st.dataframe(
+        report_df,
+        use_container_width=True,
+        hide_index=True,
+        height=560,
+    )
 
     report_csv = report_df.to_csv(index=False).encode("utf-8")
 
