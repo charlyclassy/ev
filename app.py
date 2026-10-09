@@ -322,7 +322,7 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
 # ===================================================================== #
 if "authenticated" not in st.session_state: st.session_state["authenticated"] = False
 if "current_depot" not in st.session_state: st.session_state["current_depot"] = "Bexleyheath"
-if "org_name" not in st.session_state: st.session_state["org_name"] = "UK Power Networks Express"
+if "org_name" not in st.session_state: st.session_state["org_name"] = "Optivolt Solutions Limited"
 if "grid_limit" not in st.session_state: st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[st.session_state["current_depot"]]
 if "warn_threshold" not in st.session_state: st.session_state["warn_threshold"] = round(WARNING_ALPHA * st.session_state["grid_limit"], 1)
 if "forecast_horizon" not in st.session_state: st.session_state["forecast_horizon"] = 24
@@ -352,10 +352,10 @@ if not st.session_state["authenticated"]:
     _, col_l2, _ = st.columns([1, 2, 1])
     with col_l2:
         st.markdown("<div style='height: 100px;'></div>", unsafe_allow_html=True)
-        st.markdown("<div style='text-align: center; margin-bottom: 24px;'><h2 style='color: #0F172A;'>⚡ TransitFlow Intelligence Portal</h2><p style='color: #64748B;'>Enterprise Fleet & Grid Operations Management Suite</p></div>", unsafe_allow_html=True)
+        st.markdown("<div style='text-align: center; margin-bottom: 24px;'><h2 style='color: #0F172A;'>⚡ TransitFlow Intelligence Portal</h2><p style='color: #64748B;'>EV Depot Demand Forecasting & Capacity Management</p></div>", unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown("<h4 style='color:#1E293B;'>Sign in to your account</h4>", unsafe_allow_html=True)
-            st.text_input("Username or corporate email", value="operations@ukpowernetworks.co.uk")
+            st.text_input("Username or corporate email", value="operations@optivolt.co.uk")
             st.text_input("Password", type="password", value="••••••••••••")
             if st.button("Authenticate Workspace Access", use_container_width=True):
                 st.session_state["authenticated"] = True
@@ -363,7 +363,19 @@ if not st.session_state["authenticated"]:
         st.stop()
 
 with st.sidebar:
-    st.markdown(f"<h3 style='color: white;'>{st.session_state['org_name']}</h3>", unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div style="margin-bottom: 12px;">
+            <h3 style="color: white; margin-bottom: 2px;">
+                {st.session_state['org_name']}
+            </h3>
+            <div style="color: #CBD5E1; font-size: 0.82rem; line-height: 1.25;">
+                Data: UK Power Networks Optimise Prime
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     selected_depot = st.selectbox(
         "Select Active Depot Node:",
         REAL_DEPOTS,
