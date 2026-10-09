@@ -960,10 +960,24 @@ elif nav_selection == "📋 Reports":
 
     xgb_metrics = model_meta.get("metrics_xgb", {})
 
-    report_rows = [
+    def _friendly_period(period_text):
+        try:
+            start_text, end_text = [part.strip() for part in str(period_text).split(" to ", 1)]
+            start_dt = pd.to_datetime(start_text)
+            end_dt = pd.to_datetime(end_text)
+            return f"{start_dt:%d %b %Y} – {end_dt:%d %b %Y}"
+        except Exception:
+            return str(period_text)
+
+    training_period_raw = model_meta.get("train_period", "Not available")
+    validation_period_raw = model_meta.get("validation_period", "Not available")
+    test_period_raw = model_meta.get("test_period", "Not available")
+    test_rows_value = int(model_meta.get("test_observations", len(y_test)))
+
+    report_rows_display = [
         ("Depot Name", st.session_state["current_depot"]),
         ("Model", "XGBoost"),
-        ("Trees", "340"),
+        ("Number of Trees", "340"),
         (
             "Planning Capacity Threshold",
             f"{float(st.session_state['grid_limit']):.2f} kW",
@@ -977,27 +991,60 @@ elif nav_selection == "📋 Reports":
         ("RMSE", f"{xgb_metrics.get('rmse', 'N/A')} kW"),
         ("Breach Recall", xgb_metrics.get("recall", "N/A")),
         ("False Alarm Ratio", xgb_metrics.get("far", "N/A")),
-        ("Training Period", model_meta.get("train_period", "Not available")),
-        ("Validation Period", model_meta.get("validation_period", "Not available")),
-        ("Held-out Test Period", model_meta.get("test_period", "Not available")),
-        ("Test Rows", f"{int(model_meta.get('test_observations', len(y_test))):,}"),
+        ("Training Period", _friendly_period(training_period_raw)),
+        ("Validation Period", _friendly_period(validation_period_raw)),
+        ("Held-out Test Period", _friendly_period(test_period_raw)),
+        ("Test Rows", f"{test_rows_value:,}"),
         (
             "Synthetic Data Used",
             "No" if not bool(model_meta.get("synthetic_data_used", False)) else "Yes",
         ),
     ]
 
-    report_df = pd.DataFrame(report_rows, columns=["Report Field", "Value"])
+    report_df_display = pd.DataFrame(
+        report_rows_display,
+        columns=["Report Field", "Value"],
+    )
 
     st.subheader("Operational Asset Report Preview")
     st.dataframe(
-        report_df,
+        report_df_display,
         use_container_width=True,
         hide_index=True,
         height=560,
     )
 
-    report_csv = report_df.to_csv(index=False).encode("utf-8")
+    # CSV version keeps Test Rows as a plain integer (7392, not "7,392")
+    # while retaining the same reader-friendly report structure.
+    report_rows_csv = [
+        ("Depot Name", st.session_state["current_depot"]),
+        ("Model", "XGBoost"),
+        ("Number of Trees", 340),
+        ("Planning Capacity Threshold", f"{float(st.session_state['grid_limit']):.2f} kW"),
+        (
+            "Forecast Horizon",
+            f"{int(model_meta.get('forecast_horizon_hours', st.session_state['forecast_horizon']))} hours",
+        ),
+        ("Predicted Peak", f"{float(predicted_peak):.2f} kW"),
+        ("MAE", f"{xgb_metrics.get('mae', 'N/A')} kW"),
+        ("RMSE", f"{xgb_metrics.get('rmse', 'N/A')} kW"),
+        ("Breach Recall", xgb_metrics.get("recall", "N/A")),
+        ("False Alarm Ratio", xgb_metrics.get("far", "N/A")),
+        ("Training Period", _friendly_period(training_period_raw)),
+        ("Validation Period", _friendly_period(validation_period_raw)),
+        ("Held-out Test Period", _friendly_period(test_period_raw)),
+        ("Test Rows", test_rows_value),
+        (
+            "Synthetic Data Used",
+            "No" if not bool(model_meta.get("synthetic_data_used", False)) else "Yes",
+        ),
+    ]
+
+    report_df_csv = pd.DataFrame(
+        report_rows_csv,
+        columns=["Report Field", "Value"],
+    )
+    report_csv = report_df_csv.to_csv(index=False).encode("utf-8")
 
     st.download_button(
         label="⬇️ Download Operational Asset Report (CSV)",
@@ -1008,8 +1055,8 @@ elif nav_selection == "📋 Reports":
     )
 
     st.info(
-        "The planning capacity value shown in this report is the depot planning "
-        "threshold used by the application, not a verified contracted grid connection limit."
+        "Planning capacity is an application planning threshold and not a verified "
+        "contracted grid connection limit."
     )
 
 elif nav_selection == "📜 Archive History":
