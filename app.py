@@ -991,10 +991,10 @@ elif nav_selection == "📜 Archive History":
     )
 
     show_non_zero_only = st.checkbox(
-        "Show non-zero demand only",
+        "Show intervals with observed demand only",
         value=True,
         help=(
-            "Filters out rows where both actual and forecast demand are effectively zero. "
+            "Shows only rows where actual observed demand is greater than 0.01 kW. "
             "Untick this box to inspect the complete held-out history."
         ),
     )
@@ -1002,9 +1002,11 @@ elif nav_selection == "📜 Archive History":
     display_table = history_table.copy()
 
     if show_non_zero_only:
+        # "Non-zero demand" should refer to observed demand, not merely a
+        # non-zero model prediction. This keeps the filtered archive focused
+        # on intervals where charging demand was actually present.
         display_table = display_table[
-            (display_table["Actual Observed kW"].abs() > 0.01)
-            | (display_table["Forecast kW"].abs() > 0.01)
+            display_table["Actual Observed kW"].abs() > 0.01
         ]
 
     ascending = sort_order == "Oldest first"
@@ -1017,7 +1019,7 @@ elif nav_selection == "📜 Archive History":
     c1.metric("Held-out observations", f"{total_rows:,}")
     c2.metric("Rows matching filter", f"{shown_rows:,}")
     c3.metric(
-        "Non-zero share",
+        "Observed-demand share",
         f"{(shown_rows / total_rows * 100):.1f}%" if show_non_zero_only and total_rows else "100.0%",
     )
 
@@ -1047,8 +1049,8 @@ elif nav_selection == "📜 Archive History":
     )
 
     st.caption(
-        "Tip: untick **Show non-zero demand only** to inspect every held-out "
-        "15-minute interval, including genuine zero-demand periods."
+        "Tip: untick **Show intervals with observed demand only** to inspect every held-out "
+        "15-minute interval, including zero-demand periods."
     )
 
 elif nav_selection == "⚙️ Settings / Admin":
