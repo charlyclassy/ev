@@ -299,8 +299,7 @@ def _recursive_forecast(model, history: pd.Series, feature_cols: list[str], hori
     return pd.DatetimeIndex(future_times), np.asarray(preds, dtype=float)
 
 
-@st.cache_resource(show_spinner=False)
-def execute_production_ml_pipeline(
+def _execute_production_ml_pipeline_core(
     depot_name: str,
     capacity_kw: float,
     horizon_hours: int,
@@ -466,6 +465,49 @@ def execute_production_ml_pipeline(
         "feature_cols": feature_cols,
     }
 
+
+
+@st.cache_resource(show_spinner=False)
+def execute_production_ml_pipeline(
+    depot_name: str,
+    capacity_kw: float,
+    horizon_hours: int,
+    uploaded_df=None,
+):
+    """
+    Cached pipeline used by the normal dashboard pages.
+
+    No Streamlit UI elements are created inside the cached execution path.
+    """
+    return _execute_production_ml_pipeline_core(
+        depot_name,
+        capacity_kw,
+        horizon_hours,
+        uploaded_df,
+        _progress_callback=None,
+    )
+
+
+def execute_production_ml_pipeline_with_progress(
+    depot_name: str,
+    capacity_kw: float,
+    horizon_hours: int,
+    uploaded_df,
+    progress_callback,
+):
+    """
+    Uncached retraining path used only after the user explicitly clicks Retrain.
+
+    This path may safely update Streamlit progress/status elements because it is
+    not decorated with st.cache_resource.
+    """
+    return _execute_production_ml_pipeline_core(
+        depot_name,
+        capacity_kw,
+        horizon_hours,
+        uploaded_df,
+        _progress_callback=progress_callback,
+    )
 
 
 def evaluate_existing_model_on_uploaded_data(
@@ -1345,12 +1387,12 @@ elif nav_selection == "📊 Upload Depot Data":
                     # to guarantee a new fit rather than returning a cached result.
                     execute_production_ml_pipeline.clear()
 
-                    retrained_pipeline = execute_production_ml_pipeline(
+                    retrained_pipeline = execute_production_ml_pipeline_with_progress(
                         clean_name,
                         float(uploaded_capacity),
                         int(st.session_state["forecast_horizon"]),
                         raw_uploaded_df,
-                        _progress_callback=update_retraining_progress,
+                        update_retraining_progress,
                     )
 
                     st.session_state["uploaded_df"] = raw_uploaded_df
