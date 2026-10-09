@@ -139,6 +139,105 @@ def _standardise_input(data_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+
+def validate_uploaded_telemetry(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """
+    Validate and standardise an uploaded depot telemetry file.
+
+    Required logical fields:
+      - timestamp/date/time
+      - demand/load/kW
+
+    The returned dataframe is harmonised to the model's 15-minute grid.
+    """
+    if raw_df is None or raw_df.empty:
+        raise ValueError("The uploaded file is empty.")
+
+    original = raw_df.copy()
+    original.columns = [str(c).strip() for c in original.columns]
+
+    time_candidates = [
+        c for c in original.columns
+        if c == "Timestamp" or "time" in c.lower() or "date" in c.lower()
+    ]
+    demand_candidates = [
+        c for c in original.columns
+        if c == "Demand_kW"
+        or "demand" in c.lower()
+        or "load" in c.lower()
+        or "kw" in c.lower()
+    ]
+
+    if not time_candidates:
+        raise ValueError(
+            "No timestamp/date/time column was detected. "
+            "Add a timestamp column and upload the file again."
+        )
+    if not demand_candidates:
+        raise ValueError(
+            "No demand/load kW column was detected. "
+            "Add a demand or load kW column and upload the file again."
+        )
+
+    raw_rows = len(original)
+    time_col = time_candidates[0]
+    demand_col = demand_candidates[0]
+
+    work = original[[time_col, demand_col]].rename(
+        columns={time_col: "Timestamp", demand_col: "Demand_kW"}
+    )
+    work["Timestamp"] = pd.to_datetime(work["Timestamp"], errors="coerce")
+    work["Demand_kW"] = pd.to_numeric(work["Demand_kW"], errors="coerce")
+
+    invalid_rows = int(work[["Timestamp", "Demand_kW"]].isna().any(axis=1).sum())
+    negative_values = int((work["Demand_kW"] < 0).fillna(False).sum())
+
+    standardised = _standardise_input(original)
+
+    if standardised.empty:
+        raise ValueError("No usable demand observations remain after validation.")
+
+    coverage_days = (
+        standardised.index.max() - standardised.index.min()
+    ).total_seconds() / 86400.0
+
+    # A one-week lag is used by the feature set. Require enough history for
+    # feature construction plus meaningful chronological train/validation/test splits.
+    minimum_days = 28
+    if coverage_days < minimum_days:
+        raise ValueError(
+            f"At least {minimum_days} days of telemetry are required. "
+            f"The uploaded file covers approximately {coverage_days:.1f} days."
+        )
+
+    report = {
+        "timestamp_column": time_col,
+        "demand_column": demand_col,
+        "raw_rows": raw_rows,
+        "invalid_rows_removed": invalid_rows,
+        "negative_values_clipped": negative_values,
+        "standardised_rows": len(standardised),
+        "start": standardised.index.min(),
+        "end": standardised.index.max(),
+        "coverage_days": coverage_days,
+        "sampling_interval": "15 minutes",
+    }
+    return standardised, report
+
+
+def derive_uploaded_planning_threshold(standardised_df: pd.DataFrame) -> float:
+    """
+    Derive a default planning threshold for a newly uploaded depot from the
+    development portion only: 75th percentile of daily peak demand.
+    """
+    n = len(standardised_df)
+    development_end = max(1, int(n * 0.85))
+    development = standardised_df.iloc[:development_end]["Demand_kW"]
+    daily_peaks = development.resample("1D").max().dropna()
+    if daily_peaks.empty:
+        return float(max(1.0, development.quantile(0.75)))
+    return float(max(1.0, daily_peaks.quantile(0.75)))
+
 def _build_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
     """Causal time-series features: every demand feature uses past observations only."""
     feat = df.copy()
@@ -210,17 +309,30 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
     if len(feat) < STEPS_PER_WEEK * 2:
         raise ValueError("At least two weeks of 15-minute history are required for this model.")
 
-    # Explicit chronological train / validation / held-out test split.
-    # The held-out test period is never used for fitting.
-    train_df = feat[(feat.index >= DATA_START) & (feat.index < TRAIN_END)].copy()
-    valid_df = feat[(feat.index >= TRAIN_END) & (feat.index < VALID_END)].copy()
-    test_df = feat[(feat.index >= VALID_END) & (feat.index < TEST_END)].copy()
+    # Chronological split. Bundled Optimise Prime depots use the fixed EPA
+    # project periods. Uploaded telemetry uses its own dates so current/new
+    # depot files are not forced into the 2021-2022 study window.
+    is_uploaded = uploaded_df is not None
+
+    if is_uploaded:
+        n_feat = len(feat)
+        train_end_idx = int(n_feat * 0.70)
+        valid_end_idx = int(n_feat * 0.85)
+
+        train_df = feat.iloc[:train_end_idx].copy()
+        valid_df = feat.iloc[train_end_idx:valid_end_idx].copy()
+        test_df = feat.iloc[valid_end_idx:].copy()
+        split_strategy = "Relative chronological split: 70% train / 15% validation / 15% held-out test"
+    else:
+        train_df = feat[(feat.index >= DATA_START) & (feat.index < TRAIN_END)].copy()
+        valid_df = feat[(feat.index >= TRAIN_END) & (feat.index < VALID_END)].copy()
+        test_df = feat[(feat.index >= VALID_END) & (feat.index < TEST_END)].copy()
+        split_strategy = "Fixed Optimise Prime EPA project periods"
 
     if train_df.empty or valid_df.empty or test_df.empty:
         raise ValueError(
-            "The selected depot does not cover the required project periods: "
-            "train Jul 2021-Mar 2022, validation Apr-9 May 2022, "
-            "held-out test 10 May-25 Jul 2022."
+            "The dataset does not contain enough chronological observations to "
+            "create training, validation and held-out test periods."
         )
 
     X_train, y_train = train_df[feature_cols], train_df["Demand_kW"]
@@ -258,9 +370,12 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
         raise ValueError(
             "Metric alignment error: actual, XGBoost and baseline lengths differ."
         )
-    if y_test.index.min() < VALID_END or y_test.index.max() >= TEST_END:
+    if not (
+        train_df.index.max() < valid_df.index.min()
+        and valid_df.index.max() < test_df.index.min()
+    ):
         raise ValueError(
-            "Metric alignment error: held-out rows fall outside the configured test period."
+            "Chronological split error: training, validation and held-out test periods overlap."
         )
 
     def compute_metrics(y_true, y_pred):
@@ -287,7 +402,8 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
     summary_metadata = {
         "model_type": "XGBoost 340-Tree Depot Demand Forecast Model",
         "training_date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        "dataset_source": "UK Power Networks / Optimise Prime WS2 depot trial",
+        "dataset_source": ("Uploaded depot telemetry" if is_uploaded else "UK Power Networks / Optimise Prime WS2 depot trial"),
+        "split_strategy": split_strategy,
         "selected_depot": depot_name,
         "total_rows": len(df),
         "sampling_interval": "15 minutes",
@@ -328,6 +444,9 @@ if "warn_threshold" not in st.session_state: st.session_state["warn_threshold"] 
 if "forecast_horizon" not in st.session_state: st.session_state["forecast_horizon"] = 24
 if "uploaded_df" not in st.session_state: st.session_state["uploaded_df"] = None
 if "upload_meta" not in st.session_state: st.session_state["upload_meta"] = None
+if "uploaded_depot_name" not in st.session_state: st.session_state["uploaded_depot_name"] = None
+if "uploaded_capacity_kw" not in st.session_state: st.session_state["uploaded_capacity_kw"] = None
+if "last_activated_upload_id" not in st.session_state: st.session_state["last_activated_upload_id"] = None
 if "data_source_status" not in st.session_state: st.session_state["data_source_status"] = "Real UKPN Optimise Prime bundled data"
 
 st.markdown("""
@@ -376,27 +495,61 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
+    depot_options = REAL_DEPOTS.copy()
+    uploaded_depot_name = st.session_state.get("uploaded_depot_name")
+    if uploaded_depot_name and uploaded_depot_name not in depot_options:
+        depot_options.append(uploaded_depot_name)
+
+    current_index = (
+        depot_options.index(st.session_state["current_depot"])
+        if st.session_state["current_depot"] in depot_options
+        else 0
+    )
+
     selected_depot = st.selectbox(
         "Select Active Depot Node:",
-        REAL_DEPOTS,
-        index=REAL_DEPOTS.index(st.session_state["current_depot"]) if st.session_state["current_depot"] in REAL_DEPOTS else 0,
+        depot_options,
+        index=current_index,
     )
+
     if selected_depot != st.session_state["current_depot"]:
         st.session_state["current_depot"] = selected_depot
-        st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[selected_depot]
-        st.session_state["warn_threshold"] = round(WARNING_ALPHA * DEPOT_CAPACITY_KW[selected_depot], 1)
-        st.session_state["uploaded_df"] = None
-        st.session_state["upload_meta"] = None
+
+        if selected_depot in DEPOT_CAPACITY_KW:
+            st.session_state["grid_limit"] = DEPOT_CAPACITY_KW[selected_depot]
+            st.session_state["warn_threshold"] = round(
+                WARNING_ALPHA * DEPOT_CAPACITY_KW[selected_depot], 1
+            )
+        elif (
+            selected_depot == st.session_state.get("uploaded_depot_name")
+            and st.session_state.get("uploaded_capacity_kw") is not None
+        ):
+            st.session_state["grid_limit"] = float(
+                st.session_state["uploaded_capacity_kw"]
+            )
+            st.session_state["warn_threshold"] = round(
+                WARNING_ALPHA * st.session_state["grid_limit"], 1
+            )
     st.markdown("---")
     nav_selection = st.radio("Navigation Menu:", ["🏠 Home / Overview", "🏢 Depots Setup", "📊 Upload Depot Data", "📈 Demand Forecast", "🚗 Scenario Analysis", "⚙️ Model Performance", "🚨 System Alerts", "📋 Reports", "📜 Archive History", "⚙️ Settings / Admin"])
 
 try:
     with st.spinner(f"Preparing {st.session_state['current_depot']} forecast from real Optimise Prime data..."):
+        active_uploaded_df = (
+            st.session_state["uploaded_df"]
+            if (
+                st.session_state.get("uploaded_df") is not None
+                and st.session_state["current_depot"]
+                == st.session_state.get("uploaded_depot_name")
+            )
+            else None
+        )
+
         pipeline = execute_production_ml_pipeline(
             st.session_state["current_depot"],
             float(st.session_state["grid_limit"]),
             int(st.session_state["forecast_horizon"]),
-            st.session_state["uploaded_df"],
+            active_uploaded_df,
         )
 except Exception as exc:
     st.error(str(exc))
@@ -706,10 +859,17 @@ elif nav_selection == "📊 Upload Depot Data":
 
     st.markdown("### Import depot telemetry data")
     st.caption(
-        "Upload historical or current depot telemetry data for forecasting and analysis."
+        "Use this page to upload telemetry for a depot that is not already included "
+        "in the built-in Optimise Prime dataset, or to analyse newer depot telemetry."
     )
     st.markdown(
         "**Supported formats:** CSV, XLSX  •  **Maximum file size:** 200 MB"
+    )
+
+    uploaded_depot_label = st.text_input(
+        "Uploaded depot name",
+        value=st.session_state.get("uploaded_depot_name") or "New Depot",
+        help="This name will appear in the depot selector after validation succeeds.",
     )
 
     uploaded_file = st.file_uploader(
@@ -720,27 +880,98 @@ elif nav_selection == "📊 Upload Depot Data":
 
     if uploaded_file is not None:
         try:
+            file_bytes = uploaded_file.getvalue()
+            upload_id = f"{uploaded_file.name}:{len(file_bytes)}:{hash(file_bytes[:4096])}"
+
             if uploaded_file.name.lower().endswith(".csv"):
-                uploaded_df = pd.read_csv(uploaded_file)
+                raw_uploaded_df = pd.read_csv(uploaded_file)
             else:
-                uploaded_df = pd.read_excel(uploaded_file)
+                raw_uploaded_df = pd.read_excel(uploaded_file)
 
-            st.session_state["uploaded_df"] = uploaded_df
-            st.session_state["upload_meta"] = {
-                "filename": uploaded_file.name,
-                "rows": len(uploaded_df),
-                "columns": list(uploaded_df.columns),
-            }
-
-            st.success(
-                f"Uploaded {uploaded_file.name} successfully "
-                f"({len(uploaded_df):,} rows)."
+            standardised_upload, validation = validate_uploaded_telemetry(
+                raw_uploaded_df
             )
-            st.dataframe(uploaded_df.head(20), use_container_width=True)
+
+            st.success("File validation passed.")
+
+            v1, v2, v3, v4 = st.columns(4)
+            v1.metric("Raw rows", f"{validation['raw_rows']:,}")
+            v2.metric("15-min rows", f"{validation['standardised_rows']:,}")
+            v3.metric("Coverage", f"{validation['coverage_days']:.1f} days")
+            v4.metric("Invalid rows removed", f"{validation['invalid_rows_removed']:,}")
+
+            validation_table = pd.DataFrame(
+                [
+                    ("Timestamp column detected", validation["timestamp_column"]),
+                    ("Demand column detected", validation["demand_column"]),
+                    ("Prepared sampling interval", validation["sampling_interval"]),
+                    ("Start", validation["start"].strftime("%d %b %Y %H:%M")),
+                    ("End", validation["end"].strftime("%d %b %Y %H:%M")),
+                    ("Negative demand values clipped", validation["negative_values_clipped"]),
+                    ("Minimum history check", "Passed (≥ 28 days)"),
+                    ("Chronological split", "70% train / 15% validation / 15% held-out test"),
+                ],
+                columns=["Validation Check", "Result"],
+            )
+            st.dataframe(
+                validation_table,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            default_capacity = derive_uploaded_planning_threshold(
+                standardised_upload
+            )
+
+            uploaded_capacity = st.number_input(
+                "Planning Capacity Threshold for uploaded depot (kW)",
+                min_value=0.1,
+                value=float(round(default_capacity, 1)),
+                step=1.0,
+                help=(
+                    "A default is derived from the development portion of the uploaded "
+                    "telemetry. You may replace it with a verified planning value."
+                ),
+            )
+
+            if st.button(
+                "Activate Data & Retrain XGBoost",
+                use_container_width=True,
+            ):
+                clean_name = uploaded_depot_label.strip() or "Uploaded Depot"
+
+                st.session_state["uploaded_df"] = raw_uploaded_df
+                st.session_state["uploaded_depot_name"] = clean_name
+                st.session_state["uploaded_capacity_kw"] = float(uploaded_capacity)
+                st.session_state["upload_meta"] = {
+                    "filename": uploaded_file.name,
+                    "rows": len(raw_uploaded_df),
+                    "columns": list(raw_uploaded_df.columns),
+                    "validation": validation,
+                    "split_strategy": "70% train / 15% validation / 15% held-out test",
+                }
+                st.session_state["current_depot"] = clean_name
+                st.session_state["grid_limit"] = float(uploaded_capacity)
+                st.session_state["warn_threshold"] = round(
+                    WARNING_ALPHA * float(uploaded_capacity), 1
+                )
+                st.session_state["last_activated_upload_id"] = upload_id
+
+                st.success(
+                    "Validation complete. The uploaded depot is now active. "
+                    "The XGBoost model will retrain automatically using the uploaded "
+                    "telemetry on the next app rerun."
+                )
+                st.rerun()
 
         except Exception as exc:
-            st.error(f"Could not read the uploaded file: {exc}")
+            st.error(f"Upload validation failed: {exc}")
 
+    elif st.session_state.get("uploaded_df") is not None:
+        st.info(
+            f"Active uploaded depot: **{st.session_state.get('uploaded_depot_name', 'Uploaded Depot')}**. "
+            "Select it from the sidebar to use its retrained model and forecasts."
+        )
 
 elif nav_selection == "📈 Demand Forecast":
     st.markdown(
@@ -1020,7 +1251,9 @@ elif nav_selection == "⚙️ Model Performance":
         "test rows. The held-out test data are not used to fit the 340-tree model."
     )
 
-    st.subheader("Held-Out Test Analysis — 10 May to 25 July 2022")
+    st.subheader(
+        f"Held-Out Test Analysis — {y_test.index.min():%d %b %Y} to {y_test.index.max():%d %b %Y}"
+    )
     
     # Full held-out test period (no short lookback truncation)
     residuals = y_test.values - xgb_predictions
