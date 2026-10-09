@@ -241,6 +241,17 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
     baseline_preds = test_df["Lag_96"].to_numpy()  # previous-day same-time baseline at 15-minute resolution
     errors = y_test.to_numpy() - xgb_preds
 
+    # EPA evidence guard: every displayed metric and plot must use exactly
+    # the same untouched held-out test rows.
+    if not (len(y_test) == len(xgb_preds) == len(baseline_preds)):
+        raise ValueError(
+            "Metric alignment error: actual, XGBoost and baseline lengths differ."
+        )
+    if y_test.index.min() < VALID_END or y_test.index.max() >= TEST_END:
+        raise ValueError(
+            "Metric alignment error: held-out rows fall outside the configured test period."
+        )
+
     def compute_metrics(y_true, y_pred):
         y_true = np.asarray(y_true, dtype=float)
         y_pred = np.asarray(y_pred, dtype=float)
@@ -275,6 +286,8 @@ def execute_production_ml_pipeline(depot_name: str, capacity_kw: float, horizon_
         "validation_period": f"{valid_df.index[0]:%Y-%m-%d} to {valid_df.index[-1]:%Y-%m-%d}",
         "final_fit_period": f"{development_df.index[0]:%Y-%m-%d} to {development_df.index[-1]:%Y-%m-%d}",
         "test_period": f"{test_df.index[0]:%Y-%m-%d} to {test_df.index[-1]:%Y-%m-%d}",
+        "test_observations": int(len(test_df)),
+        "metric_scope": "XGBoost and baseline metrics use the same untouched held-out test rows",
         "forecast_horizon_hours": horizon_hours,
         "synthetic_data_used": False,
         "metrics_xgb": {"mae": mae_xgb, "rmse": rmse_xgb, "recall": recall_xgb, "far": far_xgb},
@@ -502,19 +515,53 @@ elif nav_selection == "🚗 Scenario Analysis":
 
 elif nav_selection == "⚙️ Model Performance":
     st.title("⚙️ Model Performance")
+
+    metric_test_start = y_test.index.min().strftime("%d %b %Y")
+    metric_test_end = y_test.index.max().strftime("%d %b %Y")
+    st.caption(
+        f"Metric scope: **{st.session_state['current_depot']}** | "
+        f"same untouched held-out test period for XGBoost and baseline: "
+        f"**{metric_test_start} – {metric_test_end}** | "
+        f"**{len(y_test):,} observations**"
+    )
     
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Mean Absolute Error (MAE)", f"{model_meta['metrics_xgb']['mae']} kW")
     m2.metric("Root Mean Squared Error (RMSE)", f"{model_meta['metrics_xgb']['rmse']} kW")
-    m3.metric("Critical Breach Recall", model_meta['metrics_xgb']['recall'])
-    m4.metric("False Alarm Rate", model_meta['metrics_xgb']['far'])
+    m3.metric("Breach Recall", model_meta['metrics_xgb']['recall'])
+    m4.metric("False Alarm Ratio", model_meta['metrics_xgb']['far'])
     
     tbl = {
-        "Analytics Architecture Signature": ["Mean Absolute Error (MAE)", "Root Mean Squared Error (RMSE)", "Breach Recall Capture Rate (TPR)", "False Alarm Frequency Rate (FAR)"],
+        "Analytics Architecture Signature": ["Mean Absolute Error (MAE)", "Root Mean Squared Error (RMSE)", "Breach Recall Capture Rate (TPR)", "False Alarm Ratio (FP / (TP + FP))"],
         "Previous-Day Same-Hour Baseline": [f"{model_meta['metrics_baseline']['mae']} kW", f"{model_meta['metrics_baseline']['rmse']} kW", model_meta['metrics_baseline']['recall'], model_meta['metrics_baseline']['far']],
         "XGBoost 340-Tree Depot Forecast Model": [f"{model_meta['metrics_xgb']['mae']} kW", f"{model_meta['metrics_xgb']['rmse']} kW", model_meta['metrics_xgb']['recall'], model_meta['metrics_xgb']['far']]
     }
     st.table(pd.DataFrame(tbl).set_index("Analytics Architecture Signature"))
+
+    mae_improvement = (
+        100.0
+        * (model_meta["metrics_baseline"]["mae"] - model_meta["metrics_xgb"]["mae"])
+        / model_meta["metrics_baseline"]["mae"]
+        if model_meta["metrics_baseline"]["mae"] > 0
+        else 0.0
+    )
+    rmse_improvement = (
+        100.0
+        * (model_meta["metrics_baseline"]["rmse"] - model_meta["metrics_xgb"]["rmse"])
+        / model_meta["metrics_baseline"]["rmse"]
+        if model_meta["metrics_baseline"]["rmse"] > 0
+        else 0.0
+    )
+
+    b1, b2 = st.columns(2)
+    b1.metric("MAE improvement vs baseline", f"{mae_improvement:.1f}%")
+    b2.metric("RMSE improvement vs baseline", f"{rmse_improvement:.1f}%")
+
+    st.info(
+        "All error metrics, breach metrics, residuals, scatter points and the "
+        "baseline comparison on this page are calculated from the same held-out "
+        "test rows. The held-out test data are not used to fit the 340-tree model."
+    )
 
     st.subheader("Held-Out Test Analysis — 10 May to 25 July 2022")
     
@@ -554,17 +601,19 @@ elif nav_selection == "⚙️ Model Performance":
     )
     fig_avp.update_layout(
         title={
-            "text": f"Actual vs Predicted Demand — Full Held-Out Test Period"
-                    f"<br><sup>{test_start_label} to {test_end_label}</sup>",
+            "text": "Actual vs Predicted Demand — Full Held-Out Test Period",
             "x": 0.01,
+            "xanchor": "left",
+            "y": 0.97,
+            "yanchor": "top",
         },
         xaxis_title="Date",
         yaxis_title="Demand (kW)",
         template="plotly_white",
         height=470,
         hovermode="x unified",
-        legend=dict(orientation="h", y=1.12),
-        margin=dict(l=20, r=20, t=85, b=35),
+        legend=dict(orientation="h", y=1.04, x=0.01, xanchor="left"),
+        margin=dict(l=20, r=20, t=105, b=35),
     )
     fig_avp.update_xaxes(
         rangeslider=dict(visible=True, thickness=0.10),
@@ -576,6 +625,9 @@ elif nav_selection == "⚙️ Model Performance":
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
     )
+    st.caption(
+        f"Held-out test window: **{test_start_label} – {test_end_label}**"
+    )
     st.plotly_chart(fig_avp, use_container_width=True)
 
     # Plot 2: Residuals across the complete held-out test period
@@ -583,11 +635,10 @@ elif nav_selection == "⚙️ Model Performance":
     p95 = float(np.percentile(abs_res, 95))
     fig_res = go.Figure()
     fig_res.add_hrect(
-        y0=-p95, y1=p95,
+        y0=-p95,
+        y1=p95,
         fillcolor="rgba(16,185,129,0.08)",
         line_width=0,
-        annotation_text="95% absolute-error band",
-        annotation_position="top left",
     )
     fig_res.add_trace(
         go.Scatter(
@@ -602,16 +653,18 @@ elif nav_selection == "⚙️ Model Performance":
     fig_res.add_hline(y=0, line=dict(color="#64748B", dash="dash", width=1.2))
     fig_res.update_layout(
         title={
-            "text": "Residuals Over Time — Full Held-Out Test Period"
-                    f"<br><sup>Green band = ±95th percentile absolute residual ({p95:.2f} kW)</sup>",
+            "text": "Residuals Over Time — Full Held-Out Test Period",
             "x": 0.01,
+            "xanchor": "left",
+            "y": 0.97,
+            "yanchor": "top",
         },
         xaxis_title="Date",
         yaxis_title="Residual (kW)",
         template="plotly_white",
         height=390,
         hovermode="x unified",
-        margin=dict(l=20, r=20, t=85, b=35),
+        margin=dict(l=20, r=20, t=95, b=35),
     )
     fig_res.update_xaxes(
         rangeslider=dict(visible=True, thickness=0.10),
@@ -619,11 +672,18 @@ elif nav_selection == "⚙️ Model Performance":
         gridcolor="rgba(148,163,184,0.18)",
     )
     fig_res.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
+    st.caption(
+        f"Shaded green region = ±95th percentile absolute residual (**{p95:.2f} kW**)"
+    )
     st.plotly_chart(fig_res, use_container_width=True)
 
-    # Plot 3: Actual vs Predicted scatter with identity line and performance annotation
-    fig_scat = go.Figure()
-    fig_scat.add_trace(
+    # Plot 3A: Actual vs Predicted scatter — full range
+    scatter_min = 0.0
+    scatter_max = float(max(y_test.max(), xgb_predictions.max()))
+    scatter_max = max(1.0, scatter_max * 1.05)
+
+    fig_scat_full = go.Figure()
+    fig_scat_full.add_trace(
         go.Scatter(
             x=y_test.values,
             y=xgb_predictions,
@@ -633,19 +693,17 @@ elif nav_selection == "⚙️ Model Performance":
             hovertemplate="Actual: %{x:.2f} kW<br>Predicted: %{y:.2f} kW<extra></extra>",
         )
     )
-    min_val = float(min(y_test.min(), xgb_predictions.min()))
-    max_val = float(max(y_test.max(), xgb_predictions.max()))
-    fig_scat.add_trace(
+    fig_scat_full.add_trace(
         go.Scatter(
-            x=[min_val, max_val],
-            y=[min_val, max_val],
+            x=[scatter_min, scatter_max],
+            y=[scatter_min, scatter_max],
             mode="lines",
             line=dict(color="#64748B", width=2, dash="dash"),
             name="Ideal prediction (y = x)",
             hoverinfo="skip",
         )
     )
-    fig_scat.update_layout(
+    fig_scat_full.update_layout(
         title={
             "text": "Actual vs Predicted Scatter — Full Held-Out Test Period"
                     f"<br><sup>R² = {r2:.3f} | MAE = {model_meta['metrics_xgb']['mae']} kW"
@@ -659,42 +717,174 @@ elif nav_selection == "⚙️ Model Performance":
         legend=dict(orientation="h", y=1.10),
         margin=dict(l=20, r=20, t=90, b=35),
     )
-    fig_scat.update_xaxes(
-        range=[min_val, max_val],
+    fig_scat_full.update_xaxes(
+        range=[scatter_min, scatter_max],
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
     )
-    fig_scat.update_yaxes(
-        range=[min_val, max_val],
+    fig_scat_full.update_yaxes(
+        range=[scatter_min, scatter_max],
         scaleanchor="x",
         scaleratio=1,
         showgrid=True,
         gridcolor="rgba(148,163,184,0.18)",
     )
-    st.plotly_chart(fig_scat, use_container_width=True)
+    st.plotly_chart(fig_scat_full, use_container_width=True)
 
-    # Plot 4: Residual distribution
-    hist_counts, hist_edges = np.histogram(residuals, bins=40)
+    # Plot 3B: Actual vs Predicted scatter — zoomed central view
+    # Use the 95th percentile of actual/predicted demand so the dense central relationship
+    # is easy to interpret without discarding the full-range view above.
+    central_upper = float(
+        max(
+            np.percentile(y_test.values, 95),
+            np.percentile(xgb_predictions, 95),
+        )
+    )
+    central_upper = max(1.0, central_upper * 1.05)
+
+    fig_scat_zoom = go.Figure()
+    fig_scat_zoom.add_trace(
+        go.Scatter(
+            x=y_test.values,
+            y=xgb_predictions,
+            mode="markers",
+            marker=dict(size=5, opacity=0.28, color="#2563EB"),
+            name="Held-out observations",
+            hovertemplate="Actual: %{x:.2f} kW<br>Predicted: %{y:.2f} kW<extra></extra>",
+        )
+    )
+    fig_scat_zoom.add_trace(
+        go.Scatter(
+            x=[0, central_upper],
+            y=[0, central_upper],
+            mode="lines",
+            line=dict(color="#64748B", width=2, dash="dash"),
+            name="Ideal prediction (y = x)",
+            hoverinfo="skip",
+        )
+    )
+    fig_scat_zoom.update_layout(
+        title={
+            "text": "Actual vs Predicted Scatter — Zoomed Central View"
+                    f"<br><sup>Central 95% demand range | R² = {r2:.3f}</sup>",
+            "x": 0.01,
+        },
+        xaxis_title="Actual Demand (kW)",
+        yaxis_title="XGBoost Predicted Demand (kW)",
+        template="plotly_white",
+        height=500,
+        legend=dict(orientation="h", y=1.10),
+        margin=dict(l=20, r=20, t=90, b=35),
+    )
+    fig_scat_zoom.update_xaxes(
+        range=[0, central_upper],
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_scat_zoom.update_yaxes(
+        range=[0, central_upper],
+        scaleanchor="x",
+        scaleratio=1,
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    st.plotly_chart(fig_scat_zoom, use_container_width=True)
+
+    # Plot 4A: Residual distribution — full held-out range
+    hist_counts, hist_edges = np.histogram(residuals, bins=50)
     hist_centres = (hist_edges[:-1] + hist_edges[1:]) / 2
-    fig_hist = go.Figure()
-    fig_hist.add_trace(
+    mean_residual = float(np.mean(residuals))
+
+    fig_hist_full = go.Figure()
+    fig_hist_full.add_trace(
         go.Bar(
             x=hist_centres,
             y=hist_counts,
             name="Residual count",
+            marker=dict(color="#4F66F2"),
             hovertemplate="Residual: %{x:.2f} kW<br>Count: %{y}<extra></extra>",
         )
     )
-    fig_hist.add_vline(x=0, line=dict(color="#64748B", dash="dash"))
-    fig_hist.update_layout(
-        title="Residual Distribution — Held-Out Test Period",
+    fig_hist_full.add_vline(
+        x=0,
+        line=dict(color="#64748B", dash="dash", width=1.5),
+        annotation_text="Zero error",
+        annotation_position="top",
+    )
+    fig_hist_full.add_vline(
+        x=mean_residual,
+        line=dict(color="#0F172A", dash="dot", width=1.2),
+        annotation_text=f"Mean = {mean_residual:.2f} kW",
+        annotation_position="bottom right",
+    )
+    fig_hist_full.update_layout(
+        title="Residual Distribution — Full Held-Out Test Period",
         xaxis_title="Residual (Actual - Predicted) kW",
         yaxis_title="Count",
         template="plotly_white",
-        height=360,
+        height=380,
         margin=dict(l=20, r=20, t=60, b=35),
     )
-    st.plotly_chart(fig_hist, use_container_width=True)
+    fig_hist_full.update_xaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
+    fig_hist_full.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
+    st.plotly_chart(fig_hist_full, use_container_width=True)
+
+    # Plot 4B: Residual distribution — zoomed central view
+    # Keep the full histogram above for transparency; this second view focuses on
+    # the central error distribution only.
+    zoom_limit = min(
+        5.0,
+        max(
+            1.0,
+            float(np.percentile(np.abs(residuals), 95))
+        )
+    )
+    zoomed_residuals = residuals[
+        (residuals >= -zoom_limit) & (residuals <= zoom_limit)
+    ]
+
+    zoom_counts, zoom_edges = np.histogram(
+        zoomed_residuals,
+        bins=30,
+        range=(-zoom_limit, zoom_limit),
+    )
+    zoom_centres = (zoom_edges[:-1] + zoom_edges[1:]) / 2
+
+    fig_hist_zoom = go.Figure()
+    fig_hist_zoom.add_trace(
+        go.Bar(
+            x=zoom_centres,
+            y=zoom_counts,
+            name="Residual count",
+            marker=dict(color="#4F66F2"),
+            hovertemplate="Residual: %{x:.2f} kW<br>Count: %{y}<extra></extra>",
+        )
+    )
+    fig_hist_zoom.add_vline(
+        x=0,
+        line=dict(color="#64748B", dash="dash", width=1.5),
+        annotation_text="Zero error",
+        annotation_position="top",
+    )
+    fig_hist_zoom.update_layout(
+        title={
+            "text": "Residual Distribution — Zoomed Central View"
+                    f"<br><sup>Displayed range: ±{zoom_limit:.2f} kW | Full distribution shown above</sup>",
+            "x": 0.01,
+        },
+        xaxis_title="Residual (Actual - Predicted) kW",
+        yaxis_title="Count",
+        template="plotly_white",
+        height=380,
+        margin=dict(l=20, r=20, t=80, b=35),
+    )
+    fig_hist_zoom.update_xaxes(
+        range=[-zoom_limit, zoom_limit],
+        showgrid=True,
+        gridcolor="rgba(148,163,184,0.18)",
+    )
+    fig_hist_zoom.update_yaxes(showgrid=True, gridcolor="rgba(148,163,184,0.18)")
+    st.plotly_chart(fig_hist_zoom, use_container_width=True)
 
 elif nav_selection == "🚨 System Alerts":
     st.title("🚨 System Alerts")
