@@ -452,9 +452,6 @@ if nav_selection == "🏠 Home / Overview":
     </div>
     """, unsafe_allow_html=True)
     
-    # Custom summary cards avoid Streamlit's built-in ellipsis truncation
-    # and use slightly smaller text so long values such as
-    # "No breach predicted" remain fully visible.
     current_demand_text = f"{round(current_demand, 1)} kW"
     predicted_peak_text = f"{round(predicted_peak, 1)} kW"
     planning_threshold_text = f"{float(st.session_state['grid_limit']):.1f} kW"
@@ -491,7 +488,7 @@ if nav_selection == "🏠 Home / Overview":
         }}
         .home-metric-value {{
             color: #0F172A;
-            font-size: 1.72rem;
+            font-size: 1.58rem;
             font-weight: 700;
             line-height: 1.12;
             white-space: normal;
@@ -531,96 +528,106 @@ if nav_selection == "🏠 Home / Overview":
         unsafe_allow_html=True,
     )
 
-    st.subheader("Historical Headroom Footprint Profile")
-    st.caption("Recent historical demand profile for the selected depot.")
-
-    lookback = min(192, len(history_series))
-    hist_x = history_series.index[-lookback:]
-    hist_y = history_series.values[-lookback:]
-
     planning_threshold = float(st.session_state["grid_limit"])
     warning_threshold = float(st.session_state["warn_threshold"])
 
-    peak_idx = int(np.argmax(hist_y))
-    peak_time = hist_x[peak_idx]
-    peak_value = float(hist_y[peak_idx])
+    def build_home_history_chart(series: pd.Series, xaxis_title: str, peak_label: str = "Historical Peak") -> go.Figure:
+        series = series.dropna().sort_index()
+        hist_x = series.index
+        hist_y = series.to_numpy(dtype=float)
+        peak_time = series.idxmax()
+        peak_value = float(series.max())
 
-    fig_home = go.Figure()
-
-    fig_home.add_trace(
-        go.Scatter(
-            x=hist_x,
-            y=hist_y,
-            name="Actual Demand",
-            mode="lines",
-            line=dict(color="#2563EB", width=2.4),
-            hovertemplate="%{x|%d %b %Y %H:%M}<br>Actual demand: %{y:.2f} kW<extra></extra>",
+        fig_home = go.Figure()
+        fig_home.add_trace(
+            go.Scatter(
+                x=hist_x,
+                y=hist_y,
+                name="Actual Demand",
+                mode="lines",
+                line=dict(color="#2563EB", width=2.4),
+                hovertemplate="%{x|%d %b %Y %H:%M}<br>Actual demand: %{y:.2f} kW<extra></extra>",
+            )
         )
-    )
-
-    # Warning threshold as a visible legend item.
-    fig_home.add_trace(
-        go.Scatter(
-            x=[hist_x[0], hist_x[-1]],
-            y=[warning_threshold, warning_threshold],
-            name="Warning Threshold",
-            mode="lines",
-            line=dict(color="#F59E0B", width=1.8, dash="dash"),
-            hovertemplate=f"Warning threshold: {warning_threshold:.1f} kW<extra></extra>",
+        fig_home.add_trace(
+            go.Scatter(
+                x=[hist_x[0], hist_x[-1]],
+                y=[warning_threshold, warning_threshold],
+                name="Warning Threshold",
+                mode="lines",
+                line=dict(color="#F59E0B", width=1.8, dash="dash"),
+                hovertemplate=f"Warning threshold: {warning_threshold:.1f} kW<extra></extra>",
+            )
         )
-    )
-
-    # Planning capacity threshold as a visible legend item.
-    fig_home.add_trace(
-        go.Scatter(
-            x=[hist_x[0], hist_x[-1]],
-            y=[planning_threshold, planning_threshold],
-            name="Planning Capacity Threshold",
-            mode="lines",
-            line=dict(color="#EF4444", width=1.8, dash="dash"),
-            hovertemplate=f"Planning capacity threshold: {planning_threshold:.1f} kW<extra></extra>",
+        fig_home.add_trace(
+            go.Scatter(
+                x=[hist_x[0], hist_x[-1]],
+                y=[planning_threshold, planning_threshold],
+                name="Planning Capacity Threshold",
+                mode="lines",
+                line=dict(color="#EF4444", width=1.8, dash="dash"),
+                hovertemplate=f"Planning capacity threshold: {planning_threshold:.1f} kW<extra></extra>",
+            )
         )
-    )
-
-    # Highlight the highest observed point in the displayed historical window.
-    fig_home.add_trace(
-        go.Scatter(
-            x=[peak_time],
-            y=[peak_value],
-            name="Historical Peak",
-            mode="markers",
-            marker=dict(size=10, symbol="diamond", color="#7C3AED"),
-            hovertemplate="%{x|%d %b %Y %H:%M}<br>Historical peak: %{y:.2f} kW<extra></extra>",
+        fig_home.add_trace(
+            go.Scatter(
+                x=[peak_time],
+                y=[peak_value],
+                name=peak_label,
+                mode="markers",
+                marker=dict(size=8, symbol="diamond", color="#7C3AED"),
+                hovertemplate="%{x|%d %b %Y %H:%M}<br>Historical peak: %{y:.2f} kW<extra></extra>",
+            )
         )
+        fig_home.update_layout(
+            template="plotly_white",
+            height=430,
+            xaxis_title=xaxis_title,
+            yaxis_title="Demand (kW)",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+            margin=dict(l=25, r=25, t=70, b=45),
+            hovermode="x unified",
+        )
+        fig_home.update_yaxes(
+            rangemode="tozero",
+            showgrid=True,
+            gridcolor="rgba(148,163,184,0.18)",
+        )
+        fig_home.update_xaxes(
+            showgrid=True,
+            gridcolor="rgba(148,163,184,0.12)",
+        )
+        return fig_home
+
+    st.subheader("Historical Headroom Footprint Profile")
+    st.caption(
+        "Show both a short operational view and the full multi-month held-out test profile "
+        "for the selected depot."
     )
 
-    fig_home.update_layout(
-        template="plotly_white",
-        height=430,
-        xaxis_title="Time",
-        yaxis_title="Demand (kW)",
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0.0,
-        ),
-        margin=dict(l=25, r=25, t=70, b=45),
-        hovermode="x unified",
+    recent_lookback = min(192, len(history_series))
+    recent_series = history_series.iloc[-recent_lookback:]
+    full_test_series = y_test.copy()
+
+    st.markdown("**Recent operational view (last 192 intervals / 2 days)**")
+    st.caption(
+        f"A short-window operational view for {st.session_state['current_depot']} using the latest "
+        f"{recent_lookback} fifteen-minute intervals."
+    )
+    st.plotly_chart(
+        build_home_history_chart(recent_series, xaxis_title="Time", peak_label="Recent Peak"),
+        use_container_width=True,
     )
 
-    fig_home.update_yaxes(
-        rangemode="tozero",
-        showgrid=True,
-        gridcolor="rgba(148,163,184,0.18)",
+    st.markdown("**Full multi-month held-out view**")
+    st.caption(
+        f"Untouched held-out test period used for evaluation: {model_meta['test_period']} "
+        f"({model_meta['test_observations']:,} observations)."
     )
-    fig_home.update_xaxes(
-        showgrid=True,
-        gridcolor="rgba(148,163,184,0.12)",
+    st.plotly_chart(
+        build_home_history_chart(full_test_series, xaxis_title="Date", peak_label="Held-Out Peak"),
+        use_container_width=True,
     )
-
-    st.plotly_chart(fig_home, use_container_width=True)
 
 elif nav_selection == "🏢 Depots Setup":
     st.title("🏢 Depot Configuration Registry")
