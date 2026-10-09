@@ -1430,8 +1430,8 @@ elif nav_selection == "🚨 System Alerts":
     )
 
     st.info(
-        "This page reports forecast-based status from the historical project dataset. "
-        "It does not represent live grid telemetry."
+        "Forecast status is based on the historical project dataset and does not "
+        "represent live grid telemetry."
     )
 
 elif nav_selection == "📋 Reports":
